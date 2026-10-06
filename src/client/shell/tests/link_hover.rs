@@ -379,6 +379,53 @@ fn ctrl_hover_render_scale_profile() {
 }
 
 #[test]
+fn ctrl_hover_highlights_explicit_file_links() {
+    let mut state = hover_state();
+    state.set_endpoint_methods(Some(vec![]));
+    let mut next = surface();
+    next.surface_revision += 1;
+    next.frame
+        .hyperlinks
+        .push("file:///home/user/src/main.rs#L12".into());
+    for idx in 1..4 {
+        next.frame.cells[idx].hyperlink = Some(0);
+    }
+    state.set_pane_surface(next);
+    let mouse = hover_mouse(&state, 1, 0);
+    let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
+    assert!(outcome.actions.is_empty());
+    assert!(outcome.repaint);
+    let regions = &state.link_hover.as_ref().unwrap().regions;
+    assert_eq!(regions.len(), 1);
+    assert_eq!((regions[0].start_col, regions[0].end_col), (1, 3));
+}
+
+#[test]
+fn ctrl_hover_ignores_explicit_links_with_unsupported_schemes() {
+    let mut state = hover_state();
+    state.set_endpoint_methods(Some(vec![]));
+    let mut next = surface();
+    next.surface_revision += 1;
+    next.frame
+        .hyperlinks
+        .push("mailto:someone@example.com".into());
+    for idx in 1..4 {
+        next.frame.cells[idx].hyperlink = Some(0);
+    }
+    state.set_pane_surface(next);
+    let mouse = hover_mouse(&state, 1, 0);
+    let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
+    assert!(outcome.actions.is_empty());
+    assert!(
+        state
+            .link_hover
+            .as_ref()
+            .is_none_or(|hover| hover.regions.is_empty()),
+        "unsupported schemes must not be highlighted"
+    );
+}
+
+#[test]
 fn ctrl_hover_groups_contiguous_same_destination_cells_without_server_query() {
     let mut state = hover_state();
     state.set_endpoint_methods(Some(vec![]));
