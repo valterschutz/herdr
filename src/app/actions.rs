@@ -1054,6 +1054,13 @@ pub(crate) fn safe_web_url(url: &str) -> Option<&str> {
     (url.starts_with("http://") || url.starts_with("https://")).then_some(url)
 }
 
+/// Explicit OSC 8 destinations a Ctrl+click may activate. Web URLs open in the
+/// browser when no plugin claims them; `file://` URLs exist only for plugin
+/// link handlers (for example, opening a path at a line in the editor).
+pub(crate) fn activatable_link_url(url: &str) -> Option<&str> {
+    safe_web_url(url).or_else(|| url.starts_with("file://").then_some(url))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TextCell {
     ch: char,
