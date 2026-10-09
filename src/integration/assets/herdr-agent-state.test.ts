@@ -370,6 +370,35 @@ test("Pi settlement preserves explicit blocked-state precedence", async () => {
   expect(requestStates(requests)).toEqual(["idle", "working", "blocked", "idle"]);
 });
 
+test("Pi stays working while async subagents are busy", async () => {
+  const requests = await startRecordingServer("pi-busy");
+  const { eventHandlers, handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  // Busy can arrive before session_start when another extension restores runs first.
+  eventHandlers.get("herdr:busy")?.({ active: true, label: "⏳ 1 subagent" }, undefined);
+  let idle = true;
+  const context = piContext(() => idle);
+  await handlers.get("session_start")?.({ reason: "reload" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+  expect(requestStates(requests)).toEqual(["working"]);
+
+  idle = false;
+  handlers.get("agent_start")?.({}, context);
+  idle = true;
+  handlers.get("agent_settled")?.({}, context);
+  // A label change re-raises busy as an inactive/active pair; it must not flash idle.
+  eventHandlers.get("herdr:busy")?.({ active: false }, context);
+  eventHandlers.get("herdr:busy")?.({ active: true, label: "⏳ 2 subagents" }, context);
+  await Bun.sleep(25);
+  expect(requestStates(requests)).toEqual(["working"]);
+
+  eventHandlers.get("herdr:busy")?.({ active: false }, context);
+  await waitFor(() => requestStates(requests).length === 2);
+  expect(requestStates(requests)).toEqual(["working", "idle"]);
+});
+
 test("Pi reports the session replacement source", async () => {
   const requests = await startRecordingServer("pi-session-source");
   const { handlers, pi } = createExtensionHarness();
