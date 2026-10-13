@@ -56,6 +56,7 @@ impl ClientShellState {
             sidebar_collapsed: self
                 .sidebar_collapsed_manual
                 .then_some(self.sidebar_collapsed),
+            tab_bar_hidden: self.tab_bar_hidden_manual.then_some(self.tab_bar_hidden),
             agent_panel_sort: self
                 .agent_panel_sort_manual
                 .then_some(self.config.agent_panel_sort),
@@ -121,6 +122,7 @@ impl ClientShellConfig {
             mobile_width_threshold: config.ui.mobile_width_threshold,
             tab_bar_position: config.ui.tab_bar_position,
             hide_tab_bar_when_single_tab: config.ui.hide_tab_bar_when_single_tab,
+            tab_bar_start_hidden: config.ui.tab_bar_start_hidden,
             spaces: config.ui.sidebar.spaces.clone(),
             agents: config.ui.sidebar.agents.clone(),
             agent_panel_sort: config.ui.agent_panel_sort,
@@ -387,6 +389,7 @@ impl ClientShellConfig {
         cols: u16,
         rows: u16,
         sidebar_collapsed: bool,
+        tab_bar_hidden: bool,
         tab_count: usize,
         sidebar_width: u16,
     ) -> ClientShellLayout {
@@ -415,7 +418,8 @@ impl ClientShellConfig {
         }
         .min(cols.saturating_sub(1));
         let main = Rect::new(sidebar_width, 0, cols.saturating_sub(sidebar_width), rows);
-        let show_tab_bar = rows > 1 && !(self.hide_tab_bar_when_single_tab && tab_count == 1);
+        let show_tab_bar =
+            rows > 1 && !tab_bar_hidden && !(self.hide_tab_bar_when_single_tab && tab_count == 1);
         let tab_height = u16::from(show_tab_bar);
         let (tab_bar, pane_surface) = match self.tab_bar_position {
             TabBarPositionConfig::Top => (
@@ -451,6 +455,10 @@ impl ClientShellConfig {
             .preferences
             .sidebar_collapsed
             .unwrap_or(self.sidebar_start_collapsed);
+        let tab_bar_hidden = self
+            .preferences
+            .tab_bar_hidden
+            .unwrap_or(self.tab_bar_start_hidden);
         let (min_width, max_width) =
             crate::config::validated_sidebar_bounds(self.sidebar_min_width, self.sidebar_max_width)
                 .unwrap_or((18, 36));
@@ -460,7 +468,14 @@ impl ClientShellConfig {
             .unwrap_or(self.sidebar_width)
             .clamp(min_width, max_width);
         let surface = self
-            .layout(cols, rows, sidebar_collapsed, 0, sidebar_width)
+            .layout(
+                cols,
+                rows,
+                sidebar_collapsed,
+                tab_bar_hidden,
+                0,
+                sidebar_width,
+            )
             .pane_surface;
         ClientSurfaceSize {
             cols: surface.width.max(1),

@@ -842,6 +842,12 @@
           "description": "Toggle sidebar collapse."
         },
         {
+          "key": "keys.toggle_tab_bar",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Show or hide the desktop tab row. Unset by default."
+        },
+        {
           "key": "keys.indexed.tabs",
           "type": "string",
           "default": "unset",
@@ -1004,6 +1010,12 @@
           "type": "boolean",
           "default": "false",
           "description": "Hide the tab row when the workspace has one tab."
+        },
+        {
+          "key": "ui.tab_bar_start_hidden",
+          "type": "boolean",
+          "default": "false",
+          "description": "Start with the desktop tab row hidden. Bind keys.toggle_tab_bar to show or hide it; the last toggle is remembered and wins over this setting on later launches."
         },
         {
           "key": "ui.tab_bar_position",

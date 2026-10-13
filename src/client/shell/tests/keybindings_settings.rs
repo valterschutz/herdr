@@ -45,6 +45,58 @@ fn shell_new_controls_use_the_same_client_action_routes_as_keybinds() {
 }
 
 #[test]
+fn toggle_tab_bar_gives_the_tab_row_to_panes_and_is_remembered() {
+    let path = std::env::temp_dir().join(format!(
+        "herdr-client-shell-tab-bar-prefs-{}.json",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let config: Config = toml::from_str("[keys]\ntoggle_tab_bar = \"prefix+t\"").unwrap();
+    let shell_config =
+        || ClientShellConfig::from_config(&config).with_preferences_path(path.clone());
+    let mut state = ClientShellState::new(shell_config());
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let shown = state.layout(106, 20);
+    assert_eq!(shown.tab_bar.height, 1);
+
+    state.handle_input_bytes(&[0x02]);
+    let outcome = state.handle_input_bytes(b"t");
+    assert!(outcome.resize);
+    let hidden = state.layout(106, 20);
+    assert!(hidden.tab_bar.is_empty());
+    assert_eq!(hidden.pane_surface.y, 0);
+    assert_eq!(hidden.pane_surface.height, shown.pane_surface.height + 1);
+    state.compose(106, 20).expect("composed frame");
+    assert!(state.hits.tabs.is_empty());
+
+    let restored = ClientShellState::new(shell_config());
+    assert!(restored.tab_bar_hidden);
+    assert!(restored.tab_bar_hidden_manual);
+
+    state.handle_input_bytes(&[0x02]);
+    state.handle_input_bytes(b"t");
+    assert_eq!(state.layout(106, 20), shown);
+    std::fs::remove_file(path).expect("remove client chrome preferences");
+}
+
+#[test]
+fn saved_tab_bar_toggle_wins_over_tab_bar_start_hidden() {
+    let mut config = Config::default();
+    config.ui.tab_bar_start_hidden = true;
+    let started = ClientShellState::new(ClientShellConfig::from_config(&config));
+    assert!(started.tab_bar_hidden);
+    assert!(!started.tab_bar_hidden_manual);
+    assert!(started.layout(106, 20).tab_bar.is_empty());
+
+    let mut shell_config = ClientShellConfig::from_config(&config);
+    shell_config.preferences.tab_bar_hidden = Some(false);
+    let restored = ClientShellState::new(shell_config);
+    assert!(!restored.tab_bar_hidden);
+    assert_eq!(restored.layout(106, 20).tab_bar.height, 1);
+}
+
+#[test]
 fn remote_client_preferences_keep_the_same_identity_across_bridge_processes() {
     let first = ClientShellConfig::from_config(&Config::default()).with_endpoint_preferences(
         std::path::Path::new("/tmp/herdr-remote-100-dev-agents.sock"),

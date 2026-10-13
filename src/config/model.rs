@@ -455,6 +455,8 @@ pub struct KeysConfig {
     pub resize_pane_right: BindingConfig,
     /// Toggle sidebar collapse. Default: "prefix+b"
     pub toggle_sidebar: BindingConfig,
+    /// Toggle the desktop tab bar. Unset by default.
+    pub toggle_tab_bar: BindingConfig,
     /// Optional indexed shortcuts expanded over number keys 1-9.
     pub indexed: IndexedKeysConfig,
     /// Prefix-mode custom command bindings.
@@ -592,6 +594,8 @@ pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     toggle_sidebar: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    toggle_tab_bar: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     indexed: Option<IndexedKeysConfig>,
     #[serde(skip_serializing)]
     command: Option<Vec<CommandKeybindConfig>>,
@@ -703,6 +707,7 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(resize_pane_up);
         apply_field!(resize_pane_right);
         apply_field!(toggle_sidebar);
+        apply_field!(toggle_tab_bar);
         apply_field!(indexed);
         apply_field!(command);
 
@@ -808,6 +813,7 @@ impl KeysConfig {
         copy_effective_action_field!(resize_pane_up, keybinds.resize_pane_up);
         copy_effective_action_field!(resize_pane_right, keybinds.resize_pane_right);
         copy_effective_action_field!(toggle_sidebar, keybinds.toggle_sidebar);
+        copy_effective_action_field!(toggle_tab_bar, keybinds.toggle_tab_bar);
         copy_user_field!(indexed);
 
         profile
@@ -982,6 +988,8 @@ pub struct UiConfig {
     pub show_agent_labels_on_pane_borders: bool,
     /// Hide the tab row when the workspace has one tab. Default: false.
     pub hide_tab_bar_when_single_tab: bool,
+    /// Start with the desktop tab row hidden. Default: false.
+    pub tab_bar_start_hidden: bool,
     /// Desktop tab row placement. Default: top.
     pub tab_bar_position: TabBarPositionConfig,
     /// Ordered entries shown at the right edge of the desktop tab row. Empty by default.
@@ -1180,6 +1188,7 @@ impl Default for KeysConfig {
             resize_pane_up: BindingConfig::empty(),
             resize_pane_right: BindingConfig::empty(),
             toggle_sidebar: BindingConfig::one("prefix+b"),
+            toggle_tab_bar: BindingConfig::empty(),
             indexed: IndexedKeysConfig::default(),
             command: Vec::new(),
             user_fields: BTreeSet::new(),
@@ -1219,6 +1228,7 @@ impl Default for UiConfig {
             pane_gaps: true,
             show_agent_labels_on_pane_borders: false,
             hide_tab_bar_when_single_tab: false,
+            tab_bar_start_hidden: false,
             tab_bar_position: TabBarPositionConfig::Top,
             tab_bar_right: Vec::new(),
             tab_bar_right_separator: " ".into(),
@@ -1704,6 +1714,18 @@ sidebar_start_collapsed = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(config.ui.sidebar_start_collapsed);
+    }
+
+    #[test]
+    fn tab_bar_start_hidden_defaults_off_and_parses_on() {
+        assert!(!Config::default().ui.tab_bar_start_hidden);
+
+        let toml = r#"
+[ui]
+tab_bar_start_hidden = true
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.ui.tab_bar_start_hidden);
     }
 
     #[test]

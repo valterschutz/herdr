@@ -21,6 +21,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) mobile_width_threshold: u16,
     pub(super) tab_bar_position: TabBarPositionConfig,
     pub(super) hide_tab_bar_when_single_tab: bool,
+    pub(super) tab_bar_start_hidden: bool,
     pub(super) spaces: SpacesSidebarConfig,
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
@@ -870,6 +871,8 @@ pub(crate) struct ClientShellState {
     pub(super) popup_terminal_id: Option<String>,
     pub(super) sidebar_collapsed: bool,
     pub(super) sidebar_collapsed_manual: bool,
+    pub(super) tab_bar_hidden: bool,
+    pub(super) tab_bar_hidden_manual: bool,
     pub(super) sidebar_width: u16,
     pub(super) sidebar_width_manual: bool,
     pub(super) sidebar_section_split: f32,
@@ -992,6 +995,9 @@ impl ClientShellState {
         let sidebar_collapsed = preferences
             .sidebar_collapsed
             .unwrap_or(config.sidebar_start_collapsed);
+        let tab_bar_hidden = preferences
+            .tab_bar_hidden
+            .unwrap_or(config.tab_bar_start_hidden);
         let (min_width, max_width) = crate::config::validated_sidebar_bounds(
             config.sidebar_min_width,
             config.sidebar_max_width,
@@ -1035,6 +1041,8 @@ impl ClientShellState {
             popup_terminal_id: None,
             sidebar_collapsed,
             sidebar_collapsed_manual: preferences.sidebar_collapsed.is_some(),
+            tab_bar_hidden,
+            tab_bar_hidden_manual: preferences.tab_bar_hidden.is_some(),
             sidebar_width,
             sidebar_width_manual: preferences.sidebar_width.is_some(),
             sidebar_section_split,
@@ -1210,6 +1218,7 @@ impl ClientShellState {
             cols,
             rows,
             self.sidebar_collapsed,
+            self.tab_bar_hidden,
             self.focused_tab_count(),
             self.sidebar_width,
         )
