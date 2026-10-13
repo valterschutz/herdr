@@ -54,6 +54,15 @@ pub(crate) struct ClientShellConfig {
     pub(super) startup_onboarding: bool,
 }
 
+/// A maximize this client applied to one tab: the server zooms the pane, the client hides chrome.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ClientMaximize {
+    pub(super) tab_id: String,
+    /// Set once a snapshot shows the tab zoomed, so a later unzoom ends maximize. A single-pane
+    /// tab never zooms and stays maximized until the key is pressed again or focus moves away.
+    pub(super) zoom_seen: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ClientShellLayout {
     pub sidebar: Rect,
@@ -873,6 +882,7 @@ pub(crate) struct ClientShellState {
     pub(super) sidebar_collapsed_manual: bool,
     pub(super) tab_bar_hidden: bool,
     pub(super) tab_bar_hidden_manual: bool,
+    pub(super) maximize: Option<ClientMaximize>,
     pub(super) sidebar_width: u16,
     pub(super) sidebar_width_manual: bool,
     pub(super) sidebar_section_split: f32,
@@ -1043,6 +1053,7 @@ impl ClientShellState {
             sidebar_collapsed_manual: preferences.sidebar_collapsed.is_some(),
             tab_bar_hidden,
             tab_bar_hidden_manual: preferences.tab_bar_hidden.is_some(),
+            maximize: None,
             sidebar_width,
             sidebar_width_manual: preferences.sidebar_width.is_some(),
             sidebar_section_split,
@@ -1219,9 +1230,35 @@ impl ClientShellState {
             rows,
             self.sidebar_collapsed,
             self.tab_bar_hidden,
+            self.maximized(),
             self.focused_tab_count(),
             self.sidebar_width,
         )
+    }
+
+    pub(super) fn focused_tab(&self) -> Option<&ClientShellTab> {
+        let snapshot = self.snapshot.as_deref()?;
+        let tab_id = snapshot.focused_tab_id.as_deref()?;
+        snapshot.tabs.iter().find(|tab| tab.tab_id == tab_id)
+    }
+
+    pub(super) fn maximized(&self) -> bool {
+        let Some(maximize) = &self.maximize else {
+            return false;
+        };
+        self.focused_tab()
+            .is_some_and(|tab| tab.tab_id == maximize.tab_id && (tab.zoomed || !maximize.zoom_seen))
+    }
+
+    fn reconcile_maximize(&mut self) {
+        if !self.maximized() {
+            self.maximize = None;
+            return;
+        }
+        let zoomed = self.focused_tab().is_some_and(|tab| tab.zoomed);
+        if let Some(maximize) = &mut self.maximize {
+            maximize.zoom_seen |= zoomed;
+        }
     }
 
     pub(crate) fn surface_size(&self, cols: u16, rows: u16) -> ClientSurfaceSize {
@@ -1583,6 +1620,7 @@ impl ClientShellState {
         }
         self.snapshot = Some(snapshot);
         self.reconcile_pending_workspace_highlight();
+        self.reconcile_maximize();
         let pending_surface = self.pending_pane_surface.take();
         if let Some(surface) = pending_surface {
             let matching = self.snapshot.as_ref().is_some_and(|snapshot| {

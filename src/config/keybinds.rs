@@ -404,6 +404,7 @@ pub struct Keybinds {
     pub resize_pane_right: ActionKeybinds,
     pub toggle_sidebar: ActionKeybinds,
     pub toggle_tab_bar: ActionKeybinds,
+    pub maximize: ActionKeybinds,
     pub custom_commands: Vec<CustomCommandKeybind>,
 }
 
@@ -588,6 +589,7 @@ impl Config {
             resize_pane_right: empty_action!(),
             toggle_sidebar: empty_action!(),
             toggle_tab_bar: empty_action!(),
+            maximize: empty_action!(),
             custom_commands: Vec::new(),
         };
 
@@ -737,6 +739,7 @@ impl Config {
             apply_action!(keybinds.resize_pane_right, resize_pane_right, source);
             apply_action!(keybinds.toggle_sidebar, toggle_sidebar, source);
             apply_action!(keybinds.toggle_tab_bar, toggle_tab_bar, source);
+            apply_action!(keybinds.maximize, maximize, source);
 
             if source == field_source!(indexed) {
                 append_legacy_indexed_bindings(
@@ -1704,6 +1707,22 @@ next_tab = "prefix+n"
     fn back_and_forth_keybinds_are_unset_by_default() {
         let kb = Config::default().keybinds();
         assert!(kb.last_pane.bindings.is_empty());
+    }
+
+    #[test]
+    fn maximize_is_unset_by_default_and_parses_a_shifted_binding() {
+        assert!(Config::default().keybinds().maximize.bindings.is_empty());
+
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+maximize = "prefix+E"
+"#,
+        )
+        .unwrap();
+        let maximize = config.keybinds().maximize;
+        assert!(maximize.matches_prefix(&KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT)));
+        assert!(!maximize.matches_prefix(&KeyEvent::new(KeyCode::Char('e'), KeyModifiers::empty())));
     }
 
     #[test]

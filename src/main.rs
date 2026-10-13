@@ -193,6 +193,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # resize_pane_right = ""  # optional, e.g. "ctrl+shift+alt+right"
 # toggle_sidebar = "prefix+b"
 # toggle_tab_bar = ""     # optional, unset by default; bind e.g. "prefix+t" to show or hide the tab bar
+# maximize = ""           # optional, unset by default; bind e.g. "prefix+E" to zoom and hide the sidebar and tab bar
 
 # Navigate-mode movement. These local shortcuts win while navigate mode is open.
 # They are independent from focus_pane_*. Do not include prefix+, esc, enter, tab, or 1..9 here.

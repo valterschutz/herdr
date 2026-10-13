@@ -848,6 +848,12 @@
           "description": "Show or hide the desktop tab row. Unset by default."
         },
         {
+          "key": "keys.maximize",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Zoom the focused pane and hide the sidebar and tab row so it fills the terminal. Press again to leave; maximize also ends when the tab is unzoomed or another tab is focused. Unset by default."
+        },
+        {
           "key": "keys.indexed.tabs",
           "type": "string",
           "default": "unset",
