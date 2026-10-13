@@ -277,6 +277,9 @@ pub enum ResponseResult {
         active: bool,
         projection_revision: u64,
     },
+    ClientSurfacePresentationSet {
+        projection_revision: u64,
+    },
     Ok {},
 }
 

@@ -1707,6 +1707,22 @@
           ],
           "type": "object"
         },
+        "ClientSurfacePresentationSetParams": {
+          "description": "Connection-local presentation for the currently selected tab.",
+          "properties": {
+            "borderless": {
+              "type": "boolean"
+            },
+            "tab_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id",
+            "borderless"
+          ],
+          "type": "object"
+        },
         "ClientWindowTitleSetParams": {
           "properties": {
             "title": {
@@ -4897,6 +4913,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/ClientShellSurfaceSetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "client.surface.presentation.set",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ClientSurfacePresentationSetParams"
             }
           },
           "required": [
@@ -10400,6 +10432,24 @@
               "required": [
                 "type",
                 "active",
+                "projection_revision"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "projection_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "client_surface_presentation_set",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
                 "projection_revision"
               ],
               "type": "object"

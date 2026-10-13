@@ -51,7 +51,7 @@ use crate::server::client_accept::{
     accept_pending_client_connections, reject_pending_client_connections,
 };
 use crate::server::client_shell::{
-    render_pane_surface as render_client_shell_pane_surface,
+    render_pane_surface_for_presentation as render_client_shell_pane_surface,
     snapshot_with_completions as client_shell_snapshot,
 };
 use crate::server::client_transport::ServerEvent;

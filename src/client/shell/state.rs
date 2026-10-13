@@ -628,6 +628,7 @@ impl ClientShellOverlay {
 #[derive(Debug)]
 pub(super) enum PendingEndpointKind {
     Generic,
+    SurfacePresentation,
     ProductAnnouncementDismiss {
         version: String,
         id: String,
@@ -883,6 +884,11 @@ pub(crate) struct ClientShellState {
     pub(super) tab_bar_hidden: bool,
     pub(super) tab_bar_hidden_manual: bool,
     pub(super) maximize: Option<ClientMaximize>,
+    pub(super) sent_borderless_tab_id: Option<String>,
+    pub(super) surface_presentation_dirty: bool,
+    pub(super) surface_presentation_retry_at: Option<std::time::Instant>,
+    pub(super) presentation_request_id: Option<String>,
+    pub(super) presentation_revision_floor: u64,
     pub(super) sidebar_width: u16,
     pub(super) sidebar_width_manual: bool,
     pub(super) sidebar_section_split: f32,
@@ -1054,6 +1060,11 @@ impl ClientShellState {
             tab_bar_hidden,
             tab_bar_hidden_manual: preferences.tab_bar_hidden.is_some(),
             maximize: None,
+            sent_borderless_tab_id: None,
+            surface_presentation_dirty: false,
+            surface_presentation_retry_at: None,
+            presentation_request_id: None,
+            presentation_revision_floor: 0,
             sidebar_width,
             sidebar_width_manual: preferences.sidebar_width.is_some(),
             sidebar_section_split,
@@ -1157,7 +1168,7 @@ impl ClientShellState {
 
     pub(super) fn mobile_layout_active(&self) -> bool {
         self.last_composed_size
-            .is_some_and(|(cols, rows)| !self.layout(cols, rows).mobile_header.is_empty())
+            .is_some_and(|(cols, _)| cols <= self.config.mobile_width_threshold)
     }
 
     pub(super) fn collapsed_groups_for_endpoint(
@@ -1252,6 +1263,9 @@ impl ClientShellState {
 
     fn reconcile_maximize(&mut self) {
         if !self.maximized() {
+            if self.maximize.is_some() {
+                self.invalidate_pane_surface();
+            }
             self.maximize = None;
             return;
         }
@@ -1270,6 +1284,10 @@ impl ClientShellState {
     }
 
     pub(super) fn reset_endpoint_projection(&mut self) {
+        self.maximize = None;
+        self.reset_surface_presentation_epoch();
+        self.presentation_request_id = None;
+        self.presentation_revision_floor = 0;
         self.hits = ShellHitMap::default();
         self.pane_surface = None;
         self.pending_pane_surface = None;
@@ -1356,6 +1374,9 @@ impl ClientShellState {
         // Screen revisions restart per connection. Keep the displayed surface for selection
         // content comparisons, but retire speculative frames from the old connection.
         if generation_changed {
+            self.reset_surface_presentation_epoch();
+            self.presentation_request_id = None;
+            self.presentation_revision_floor = 0;
             self.pending_pane_surface = None;
         }
         self.active_snapshot_generation = generation;
@@ -1645,6 +1666,19 @@ impl ClientShellState {
     }
 
     pub(crate) fn set_pane_surface(&mut self, surface: PaneSurfaceFrame) {
+        if surface.projection_revision < self.presentation_revision_floor {
+            return;
+        }
+        if self.presentation_request_id.is_some() {
+            if self
+                .pending_pane_surface
+                .as_ref()
+                .is_none_or(|current| surface.projection_revision >= current.projection_revision)
+            {
+                self.pending_pane_surface = Some(surface);
+            }
+            return;
+        }
         let Some(snapshot) = self.snapshot.as_ref() else {
             return;
         };
@@ -1674,6 +1708,13 @@ impl ClientShellState {
     }
 
     fn install_pane_surface(&mut self, mut surface: PaneSurfaceFrame, retain_future: bool) {
+        if surface.projection_revision < self.presentation_revision_floor {
+            return;
+        }
+        if self.presentation_request_id.is_some() {
+            self.pending_pane_surface = Some(surface);
+            return;
+        }
         let Some(snapshot) = self.snapshot.as_ref() else {
             return;
         };
@@ -1920,6 +1961,12 @@ impl ClientShellState {
             .min()
             .map(|deadline| deadline.saturating_duration_since(now).min(default))
             .unwrap_or(default)
+    }
+
+    pub(crate) fn reset_surface_presentation_epoch(&mut self) {
+        self.sent_borderless_tab_id = None;
+        self.surface_presentation_dirty = false;
+        self.surface_presentation_retry_at = None;
     }
 
     pub(crate) fn invalidate_pane_surface(&mut self) {

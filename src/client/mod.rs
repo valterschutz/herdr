@@ -2116,6 +2116,7 @@ async fn run_client_loop(
                             snapshot,
                             projection_pending,
                             &mut write_stream,
+                            &mut endpoint_commands,
                             &mut prefix_input_source,
                         )?;
                         if matches!(

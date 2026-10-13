@@ -76,6 +76,45 @@ impl HeadlessServer {
             return false;
         }
 
+        if let api::schema::Method::ClientSurfacePresentationSet(params) = &request.method {
+            if self.shell_tab_id_for_client(client_id).as_deref() != Some(params.tab_id.as_str()) {
+                self.send_to_client(
+                    client_id,
+                    crate::server::client_commands::error_message(
+                        boot_id,
+                        request_id,
+                        "stale_target",
+                        "presentation targeted a tab that is no longer selected",
+                    ),
+                );
+                return false;
+            }
+            let Some(client) = self.clients.get_mut(&client_id) else {
+                return false;
+            };
+            client.shell_borderless_tab_id = params.borderless.then(|| params.tab_id.clone());
+            client.shell_projection_revision = client.shell_projection_revision.saturating_add(1);
+            let projection_revision = client.shell_projection_revision;
+            client.shell_snapshot = None;
+            client.request_recompute();
+            // Pending old geometry must not cross the presentation acknowledgement floor.
+            if let Some(writer) = &client.writer {
+                writer.discard_pending_render();
+            }
+            self.resize_shell_tab_if_controller(client_id, true);
+            self.send_to_client(
+                client_id,
+                crate::server::client_commands::success_message_with_result(
+                    boot_id,
+                    request_id,
+                    api::schema::ResponseResult::ClientSurfacePresentationSet {
+                        projection_revision,
+                    },
+                ),
+            );
+            return true;
+        }
+
         let api_request_id = format!(
             "endpoint:{}:{client_id}:{request_id}",
             self.client_shell_boot_id

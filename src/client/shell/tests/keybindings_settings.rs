@@ -1081,3 +1081,420 @@ fn resize_mode_reuses_endpoint_resize_and_stays_active_until_done() {
     assert!(state.handle_input_bytes(b"\r").actions.is_empty());
     assert_eq!(state.mode, ClientShellMode::Terminal);
 }
+
+fn presentation_request(actions: &[ClientShellAction]) -> &crate::api::schema::Request {
+    let [ClientShellAction::Endpoint { request, .. }] = actions else {
+        panic!("one presentation request");
+    };
+    assert!(matches!(
+        request.method,
+        crate::api::schema::Method::ClientSurfacePresentationSet(_)
+    ));
+    request
+}
+
+#[test]
+fn maximize_presentation_tracks_single_pane_equal_dimensions_and_chrome_exit() {
+    let mut state = maximize_state();
+    state.set_endpoint_methods(Some(vec![
+        "pane.zoom".into(),
+        "client.surface.presentation.set".into(),
+    ]));
+    // Mobile has no other dimensions to restore once its header is hidden manually by maximize.
+    let normal = state.layout(40, 12);
+    assert_eq!(normal.mobile_header.height, 2);
+    press_prefixed(&mut state, b"E");
+    assert_eq!(state.layout(40, 12).pane_surface, Rect::new(0, 0, 40, 12));
+    assert!(state.layout(40, 12).mobile_header.is_empty());
+    let first = state.sync_surface_presentation();
+    let request = presentation_request(&first);
+    assert_eq!(
+        serde_json::to_value(&request.method).unwrap(),
+        serde_json::json!({"method":"client.surface.presentation.set", "params":{"tab_id":"tab_1", "borderless":true}})
+    );
+    assert!(state.sync_surface_presentation().is_empty());
+    // Single-pane zoom can be a no-op: maximize must still survive snapshots.
+    let mut next = state.snapshot.as_deref().unwrap().clone();
+    next.revision += 1;
+    state.set_snapshot(Box::new(next));
+    assert!(state.maximized());
+    state.handle_endpoint_result(
+        "boot-1",
+        &request.id,
+        Ok(
+            crate::api::schema::ResponseResult::ClientSurfacePresentationSet {
+                projection_revision: 3,
+            },
+        ),
+    );
+    let before = state.surface_size(106, 20);
+    // Hide both normal chrome regions: exit has exactly the same surface dimensions.
+    state.sidebar_collapsed = true;
+    state.config.sidebar_collapsed_mode = crate::config::SidebarCollapsedModeConfig::Hidden;
+    state.tab_bar_hidden = true;
+    state.maximize = None;
+    assert_eq!(before, state.surface_size(106, 20));
+    let clear = state.sync_surface_presentation();
+    let request = presentation_request(&clear);
+    assert!(
+        matches!(&request.method, crate::api::schema::Method::ClientSurfacePresentationSet(params) if !params.borderless)
+    );
+    assert!(state.sync_surface_presentation().is_empty());
+}
+
+#[test]
+fn maximize_presentation_fences_old_frames_until_latest_acknowledgement() {
+    let mut state = maximize_state();
+    press_prefixed(&mut state, b"E");
+    let actions = state.sync_surface_presentation();
+    let request = presentation_request(&actions);
+    state.set_pane_surface(surface());
+    assert!(
+        state.pane_surface.is_none(),
+        "old geometry cannot be installed while pending"
+    );
+    let mut new_surface = surface();
+    new_surface.projection_revision = 4;
+    state.set_pane_surface(new_surface.clone());
+    state.handle_endpoint_result(
+        "boot-1",
+        &request.id,
+        Ok(
+            crate::api::schema::ResponseResult::ClientSurfacePresentationSet {
+                projection_revision: 3,
+            },
+        ),
+    );
+    assert_eq!(state.presentation_revision_floor, 3);
+    let mut next = state.snapshot.as_deref().unwrap().clone();
+    next.revision = 4;
+    next.tabs[0].zoomed = true;
+    state.set_snapshot(Box::new(next));
+    assert!(state.maximized());
+    assert_eq!(state.pane_surface.as_ref().unwrap().projection_revision, 4);
+    state.set_pane_surface(surface());
+    assert_eq!(state.pane_surface.as_ref().unwrap().projection_revision, 4);
+    // A remote unzoom invalidates geometry and sends normal policy even without a key event.
+    set_focused_tab_zoomed(&mut state, false);
+    assert!(state.pane_surface.is_none());
+    let clear = state.sync_surface_presentation();
+    assert!(
+        matches!(&presentation_request(&clear).method, crate::api::schema::Method::ClientSurfacePresentationSet(params) if !params.borderless)
+    );
+}
+
+#[test]
+fn maximize_presentation_resets_on_tab_endpoint_and_connection_generation() {
+    let mut state = maximize_state();
+    press_prefixed(&mut state, b"E");
+    assert_eq!(state.sync_surface_presentation().len(), 1);
+    let mut next = state.snapshot.as_deref().unwrap().clone();
+    next.revision += 1;
+    next.focused_tab_id = Some("tab_2".into());
+    let mut other = next.tabs[0].clone();
+    other.tab_id = "tab_2".into();
+    next.tabs.push(other);
+    state.set_snapshot(Box::new(next));
+    let clear = state.sync_surface_presentation();
+    assert!(
+        matches!(&presentation_request(&clear).method, crate::api::schema::Method::ClientSurfacePresentationSet(params) if params.tab_id == "tab_2" && !params.borderless)
+    );
+    state.reset_endpoint_projection();
+    assert!(!state.maximized());
+    assert!(state.sent_borderless_tab_id.is_none());
+    assert!(state.presentation_request_id.is_none());
+    assert_eq!(state.presentation_revision_floor, 0);
+    // Same tab on a new connection must resend its live policy, not rely on equal dimensions.
+    let mut state = maximize_state();
+    press_prefixed(&mut state, b"E");
+    state.sync_surface_presentation();
+    state.set_endpoint_snapshot_for_generation(&ClientEndpointId::Local, 2, Box::new(snapshot()));
+    assert!(state.maximized());
+    assert_eq!(state.sync_surface_presentation().len(), 1);
+    // Surface-off/on on this same connection also clears the server policy.
+    state.reset_surface_presentation_epoch();
+    assert!(state.maximized());
+    assert_eq!(state.sync_surface_presentation().len(), 1);
+}
+
+#[test]
+fn maximize_presentation_command_follows_zoom_in_the_existing_endpoint_lane() {
+    use crate::client::{
+        endpoint::{EndpointNegotiation, EndpointRegistry, EndpointTransport},
+        endpoint_commands::EndpointCommands,
+    };
+    use std::sync::{Arc, Mutex};
+    struct Capture(Arc<Mutex<Vec<ClientMessage>>>);
+    impl EndpointTransport for Capture {
+        fn send(&mut self, message: &ClientMessage) -> std::io::Result<()> {
+            self.0.lock().unwrap().push(message.clone());
+            Ok(())
+        }
+    }
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let mut endpoints =
+        EndpointRegistry::new(Capture(sent.clone()), 1, EndpointNegotiation::default());
+    let mut commands = EndpointCommands::default();
+    let mut state = maximize_state();
+    let input = press_prefixed(&mut state, b"E");
+    let resize =
+        crate::client::shell_runtime::client_shell_resize_message(&state, 106, 20, 8, 16, true);
+    endpoints.send_to(&ClientEndpointId::Local, &resize);
+    crate::client::shell_runtime::dispatch_client_shell_actions(
+        input.actions,
+        &mut commands,
+        &mut endpoints,
+        Some(&mut state),
+        &mut Vec::new(),
+        &mut None,
+    )
+    .unwrap();
+    let messages = sent.lock().unwrap().clone();
+    assert!(matches!(
+        messages[0],
+        ClientMessage::ClientShellResize {
+            surface_size: crate::protocol::ClientSurfaceSize {
+                cols: 106,
+                rows: 20
+            },
+            ..
+        }
+    ));
+    let ClientMessage::ClientShellEndpointRequest { request, .. } = &messages[1] else {
+        panic!("zoom after resize");
+    };
+    let zoom: crate::api::schema::Request = serde_json::from_str(request).unwrap();
+    assert!(matches!(
+        zoom.method,
+        crate::api::schema::Method::PaneZoom(_)
+    ));
+    assert_eq!(messages.len(), 2, "presentation waits for zoom completion");
+    let response = serde_json::to_vec(&crate::api::schema::SuccessResponse {
+        id: zoom.id.clone(),
+        result: crate::api::schema::ResponseResult::Ok {},
+    })
+    .unwrap();
+    commands
+        .receive_chunk(
+            &ClientEndpointId::Local,
+            1,
+            "boot-1",
+            &zoom.id,
+            true,
+            response,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(commands
+        .send_next(&ClientEndpointId::Local, &mut endpoints)
+        .is_empty());
+    let messages = sent.lock().unwrap();
+    let ClientMessage::ClientShellEndpointRequest { request, .. } = &messages[2] else {
+        panic!("presentation after zoom");
+    };
+    let presentation: crate::api::schema::Request = serde_json::from_str(request).unwrap();
+    assert!(
+        matches!(presentation.method, crate::api::schema::Method::ClientSurfacePresentationSet(params) if params.borderless)
+    );
+}
+
+#[test]
+fn maximize_full_surface_keeps_pixel_input_prefix_overlay_and_mobile_navigation() {
+    let mut state = maximize_state();
+    press_prefixed(&mut state, b"E");
+    let mut full = surface();
+    full.frame = FrameData::from_ratatui_buffer_with_hyperlinks(
+        &Buffer::empty(Rect::new(0, 0, 40, 12)),
+        None,
+        &[],
+    );
+    full.panes[0].rect = SurfaceRect {
+        x: 0,
+        y: 0,
+        width: 40,
+        height: 12,
+    };
+    full.panes[0].inner_rect = full.panes[0].rect;
+    full.panes[0].mouse_reporting = true;
+    full.panes[0].sgr_pixel_mouse = true;
+    full.panes[0].pixel_width = 400;
+    full.panes[0].pixel_height = 240;
+    state.set_pane_surface(full);
+    state.compose(40, 12).unwrap();
+    assert_eq!(state.hits.panes[0].inner_rect, Rect::new(0, 0, 40, 12));
+    assert!(state.hits.panes[0].scrollbar_rect.is_none());
+    let geometry = crate::input::mouse::HostGeometry::new(40, 12, 400, 240).unwrap();
+    let input = state.handle_pixel_mouse(b"\x1b[<0;400;240M", geometry);
+    assert!(
+        matches!(&input.requests[..], [ClientMessage::ClientShellPaneInput { events, .. }] if matches!(&events[..], [ClientPaneInputEvent::Mouse { position: ClientMousePosition::Pixels { x: 400, y: 240, column: 39, row: 11 }, .. }]))
+    );
+    state.handle_raw_events(vec![RawInputEvent::OuterFocusLost]);
+    state.mode = ClientShellMode::Prefix;
+    let prefix = state.compose(40, 12).unwrap();
+    assert!(frame_rows(&prefix.frame).join("\n").contains("PREFIX"));
+    state.mode = ClientShellMode::Navigate;
+    state.compose(40, 12).unwrap();
+    assert!(state.mobile_layout_active());
+    assert!(
+        !state.hits.mobile_targets.is_empty(),
+        "mobile navigation remains available without persistent header"
+    );
+}
+
+fn acknowledge_presentation(state: &mut ClientShellState, request_id: &str) {
+    state.handle_endpoint_result(
+        "boot-1",
+        request_id,
+        Ok(
+            crate::api::schema::ResponseResult::ClientSurfacePresentationSet {
+                projection_revision: 3,
+            },
+        ),
+    );
+}
+
+fn reject_presentation(state: &mut ClientShellState, request_id: &str, code: &str) {
+    state.handle_endpoint_result(
+        "boot-1",
+        request_id,
+        Err(ClientShellEndpointError {
+            code: Some(code.into()),
+            message: "presentation did not complete".into(),
+        }),
+    );
+}
+
+#[test]
+fn maximize_presentation_failed_clear_retries_until_acknowledged_normal() {
+    let mut state = maximize_state();
+    press_prefixed(&mut state, b"E");
+    let entry = state.sync_surface_presentation();
+    acknowledge_presentation(&mut state, &presentation_request(&entry).id);
+    press_prefixed(&mut state, b"t");
+    let clear = state.sync_surface_presentation();
+    let request = presentation_request(&clear);
+    assert!(
+        matches!(&request.method, crate::api::schema::Method::ClientSurfacePresentationSet(params) if !params.borderless)
+    );
+    reject_presentation(&mut state, &request.id, "endpoint_busy");
+    assert!(state.sent_borderless_tab_id.is_none());
+    assert!(
+        state.surface_presentation_dirty,
+        "None is not acknowledged normal after failure"
+    );
+    assert!(state.sync_surface_presentation().is_empty());
+    let retry_at = state.surface_presentation_retry_at.unwrap();
+    let retry = state.sync_surface_presentation_at(retry_at);
+    let request = presentation_request(&retry);
+    assert!(
+        matches!(&request.method, crate::api::schema::Method::ClientSurfacePresentationSet(params) if !params.borderless)
+    );
+    assert!(
+        state.sync_surface_presentation_at(retry_at).is_empty(),
+        "one retry remains in flight"
+    );
+    acknowledge_presentation(&mut state, &request.id);
+    assert!(!state.surface_presentation_dirty);
+    assert!(state.surface_presentation_retry_at.is_none());
+    assert!(state.sync_surface_presentation_at(retry_at).is_empty());
+}
+
+#[test]
+fn maximize_presentation_repeated_busy_responses_wait_before_retrying() {
+    let mut state = maximize_state();
+    press_prefixed(&mut state, b"E");
+    let mut actions = state.sync_surface_presentation();
+    for _ in 0..3 {
+        let request = presentation_request(&actions);
+        reject_presentation(&mut state, &request.id, "endpoint_busy");
+        let retry_at = state.surface_presentation_retry_at.unwrap();
+        for _ in 0..10 {
+            assert!(
+                state.sync_surface_presentation().is_empty(),
+                "response callbacks must not cause a request loop"
+            );
+        }
+        assert!(state
+            .sync_surface_presentation_at(retry_at - std::time::Duration::from_millis(1))
+            .is_empty());
+        actions = state.sync_surface_presentation_at(retry_at);
+        assert!(
+            matches!(&presentation_request(&actions).method, crate::api::schema::Method::ClientSurfacePresentationSet(params) if params.borderless)
+        );
+        assert!(state.sync_surface_presentation_at(retry_at).is_empty());
+    }
+    acknowledge_presentation(&mut state, &presentation_request(&actions).id);
+    assert!(!state.surface_presentation_dirty);
+    assert!(state.sync_surface_presentation().is_empty());
+}
+
+#[test]
+fn maximize_presentation_timeout_and_cancellation_preserve_failed_clear_recovery() {
+    for cancelled in [false, true] {
+        let mut state = maximize_state();
+        press_prefixed(&mut state, b"E");
+        let entry = state.sync_surface_presentation();
+        acknowledge_presentation(&mut state, &presentation_request(&entry).id);
+        state.maximize = None;
+        let clear = state.sync_surface_presentation();
+        let request_id = presentation_request(&clear).id.clone();
+        if cancelled {
+            state.cancel_endpoint_request(&request_id);
+        } else {
+            reject_presentation(&mut state, &request_id, "endpoint_timeout");
+        }
+        assert!(state.surface_presentation_dirty);
+        assert!(state.presentation_request_id.is_none());
+        assert!(state.sync_surface_presentation().is_empty());
+        let retry =
+            state.sync_surface_presentation_at(state.surface_presentation_retry_at.unwrap());
+        let retry_id = presentation_request(&retry).id.clone();
+        // A retired request cannot acknowledge the new attempt or clear its uncertainty.
+        acknowledge_presentation(&mut state, &request_id);
+        assert_eq!(
+            state.presentation_request_id.as_deref(),
+            Some(retry_id.as_str())
+        );
+        assert!(state.surface_presentation_dirty);
+        acknowledge_presentation(&mut state, &retry_id);
+        assert!(!state.surface_presentation_dirty);
+        assert!(state.sync_surface_presentation().is_empty());
+    }
+}
+
+#[test]
+fn maximize_presentation_failure_allows_state_change_and_reconnect_without_backoff() {
+    let mut state = maximize_state();
+    press_prefixed(&mut state, b"E");
+    let entry = state.sync_surface_presentation();
+    reject_presentation(
+        &mut state,
+        &presentation_request(&entry).id,
+        "endpoint_busy",
+    );
+    state.maximize = None;
+    let clear = state.sync_surface_presentation();
+    assert!(
+        matches!(&presentation_request(&clear).method, crate::api::schema::Method::ClientSurfacePresentationSet(params) if !params.borderless)
+    );
+    reject_presentation(
+        &mut state,
+        &presentation_request(&clear).id,
+        "endpoint_timeout",
+    );
+    press_prefixed(&mut state, b"E");
+    let entry = state.sync_surface_presentation();
+    assert!(
+        matches!(&presentation_request(&entry).method, crate::api::schema::Method::ClientSurfacePresentationSet(params) if params.borderless)
+    );
+    reject_presentation(
+        &mut state,
+        &presentation_request(&entry).id,
+        "endpoint_busy",
+    );
+    state.set_endpoint_snapshot_for_generation(&ClientEndpointId::Local, 2, Box::new(snapshot()));
+    assert!(state.maximized());
+    assert!(!state.surface_presentation_dirty);
+    assert!(state.surface_presentation_retry_at.is_none());
+    assert_eq!(state.sync_surface_presentation().len(), 1);
+}

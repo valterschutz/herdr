@@ -89,6 +89,29 @@ impl HeadlessServer {
             .and_then(|target| self.tab_id_for_target(target))
     }
 
+    pub(super) fn shell_presentation_for_client(
+        &self,
+        client_id: u64,
+        target: Option<crate::ui::TabSurfaceTarget>,
+    ) -> crate::ui::TabSurfacePresentation {
+        let borderless = self
+            .clients
+            .get(&client_id)
+            .filter(|client| client.shell_surface_active)
+            .and_then(|client| client.shell_borderless_tab_id.as_deref())
+            .is_some_and(|tab_id| {
+                target.is_some_and(|target| {
+                    self.app.parse_tab_id(tab_id)
+                        == Some((target.workspace_index, target.tab_index))
+                })
+            });
+        if borderless {
+            crate::ui::TabSurfacePresentation::Borderless
+        } else {
+            crate::ui::TabSurfacePresentation::Normal
+        }
+    }
+
     fn client_shell_topology(&self) -> ClientShellTopology {
         let focused_workspace_id = self
             .app
@@ -157,6 +180,14 @@ impl HeadlessServer {
                 }
             });
             location.reconcile(&topology);
+            if client
+                .shell_borderless_tab_id
+                .as_deref()
+                .is_some_and(|tab_id| location.focused_tab_id() != Some(tab_id))
+            {
+                client.shell_borderless_tab_id = None;
+                client.request_recompute();
+            }
         }
     }
 
@@ -176,6 +207,9 @@ impl HeadlessServer {
             .filter(|client| client.is_shell_client())
         {
             if let Some(location) = client.shell_location.as_mut() {
+                if location.focused_tab_id() != Some(tab_id.as_str()) {
+                    client.shell_borderless_tab_id = None;
+                }
                 location.focus_tab(workspace_id.clone(), tab_id.clone());
             }
         }
@@ -196,6 +230,9 @@ impl HeadlessServer {
         let Some(location) = client.shell_location.as_mut() else {
             return false;
         };
+        if location.focused_tab_id() != Some(tab_id) {
+            client.shell_borderless_tab_id = None;
+        }
         location.focus_tab(workspace_id, tab_id.to_owned());
         true
     }
@@ -344,6 +381,13 @@ impl HeadlessServer {
                     return false;
                 };
                 location.focus_workspace(workspace_id);
+                if client
+                    .shell_borderless_tab_id
+                    .as_deref()
+                    .is_some_and(|tab_id| location.focused_tab_id() != Some(tab_id))
+                {
+                    client.shell_borderless_tab_id = None;
+                }
                 true
             }
             api::schema::Method::TabFocus(target) => {
@@ -577,27 +621,39 @@ impl HeadlessServer {
             crate::kitty_graphics::HostCellSize::default()
         };
         let area = Rect::new(0, 0, cols, rows);
+        let presentation = self.shell_presentation_for_client(client_id, Some(target));
         if self.app_client_count() == 1 {
             for (workspace_index, workspace) in self.app.state.workspaces.iter().enumerate() {
                 for tab_index in 0..workspace.tabs.len() {
-                    crate::ui::resize_tab_surface(
+                    crate::ui::resize_tab_surface_for_presentation(
                         &self.app.state,
                         &self.app.terminal_runtimes,
                         workspace_index,
                         tab_index,
                         area,
                         cell_size,
+                        if target
+                            == (crate::ui::TabSurfaceTarget {
+                                workspace_index,
+                                tab_index,
+                            })
+                        {
+                            presentation
+                        } else {
+                            crate::ui::TabSurfacePresentation::Normal
+                        },
                     );
                 }
             }
         } else {
-            crate::ui::compute_tab_surface_for(
+            crate::ui::compute_tab_surface_for_presentation(
                 &self.app.state,
                 &self.app.terminal_runtimes,
                 Some(target),
                 area,
                 true,
                 cell_size,
+                presentation,
             );
         }
         if self

@@ -12,6 +12,20 @@ pub(crate) struct TabSurfaceTarget {
     pub(crate) tab_index: usize,
 }
 
+/// Connection-local content geometry; it never changes ordinary tab chrome.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TabSurfacePresentation {
+    #[default]
+    Normal,
+    Borderless,
+}
+
+impl TabSurfacePresentation {
+    pub(crate) fn borderless(self, tab: &crate::workspace::Tab) -> bool {
+        self == Self::Borderless && (tab.zoomed || tab.layout.pane_count() == 1)
+    }
+}
+
 pub(crate) struct TabSurfaceLayout {
     pub(crate) target: Option<TabSurfaceTarget>,
     pub(crate) pane_infos: Vec<PaneInfo>,
@@ -57,6 +71,26 @@ pub(crate) fn compute_tab_surface_for(
     resize_panes: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
 ) -> TabSurfaceLayout {
+    compute_tab_surface_for_presentation(
+        app,
+        terminal_runtimes,
+        target,
+        area,
+        resize_panes,
+        cell_size,
+        TabSurfacePresentation::Normal,
+    )
+}
+
+pub(crate) fn compute_tab_surface_for_presentation(
+    app: &AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+    target: Option<TabSurfaceTarget>,
+    area: Rect,
+    resize_panes: bool,
+    cell_size: crate::kitty_graphics::HostCellSize,
+    presentation: TabSurfacePresentation,
+) -> TabSurfaceLayout {
     let tab = target.and_then(|target| {
         app.workspaces
             .get(target.workspace_index)?
@@ -81,6 +115,7 @@ pub(crate) fn compute_tab_surface_for(
             area,
             resize_panes,
             cell_size,
+            presentation,
         )
     });
 
@@ -99,6 +134,26 @@ pub(crate) fn resize_tab_surface(
     area: Rect,
     cell_size: crate::kitty_graphics::HostCellSize,
 ) {
+    resize_tab_surface_for_presentation(
+        app,
+        terminal_runtimes,
+        workspace_index,
+        tab_index,
+        area,
+        cell_size,
+        TabSurfacePresentation::Normal,
+    );
+}
+
+pub(crate) fn resize_tab_surface_for_presentation(
+    app: &AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+    workspace_index: usize,
+    tab_index: usize,
+    area: Rect,
+    cell_size: crate::kitty_graphics::HostCellSize,
+    presentation: TabSurfacePresentation,
+) {
     let Some(tab) = app
         .workspaces
         .get(workspace_index)
@@ -113,6 +168,7 @@ pub(crate) fn resize_tab_surface(
         tab,
         area,
         cell_size,
+        presentation,
     );
 }
 
@@ -215,6 +271,205 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::layout::Direction;
     use ratatui::Terminal;
+
+    #[tokio::test]
+    async fn borderless_surface_compute_and_resize_restore_normal_zoom_geometry() {
+        use crate::config::PaneBordersConfig;
+        use ratatui::widgets::Borders;
+        let area = Rect::new(3, 2, 40, 12);
+        let target = Some(TabSurfaceTarget {
+            workspace_index: 0,
+            tab_index: 0,
+        });
+        let runtimes = TerminalRuntimeRegistry::new();
+        let cell_size = crate::kitty_graphics::HostCellSize {
+            width_px: 8,
+            height_px: 16,
+        };
+        for multi_pane in [false, true] {
+            for scrollbars in [false, true] {
+                for borders in [PaneBordersConfig::Always, PaneBordersConfig::Off] {
+                    let mut workspace = Workspace::test_new("borderless");
+                    let focused = if multi_pane {
+                        workspace.test_split(Direction::Horizontal)
+                    } else {
+                        workspace.tabs[0].root_pane
+                    };
+                    workspace.tabs[0].zoomed = multi_pane;
+                    workspace.insert_test_runtime(
+                        focused,
+                        crate::terminal::TerminalRuntime::test_with_screen_bytes(20, 8, b"CONTENT"),
+                    );
+                    let mut app = AppState::test_new();
+                    app.workspaces = vec![workspace];
+                    app.active = Some(0);
+                    app.pane_borders = borders;
+                    app.pane_outer_borders = true;
+                    app.pane_scrollbars = scrollbars;
+                    for alternate in [false, true, false] {
+                        let rt = app
+                            .runtime_for_pane_in_workspace(&runtimes, 0, focused)
+                            .unwrap();
+                        rt.test_process_pty_bytes(if alternate {
+                            b"\x1b[?1049h"
+                        } else {
+                            b"\x1b[?1049l"
+                        });
+                        let normal =
+                            compute_tab_surface_for(&app, &runtimes, target, area, true, cell_size);
+                        let normal_inner = normal.pane_infos[0].inner_rect;
+                        let layout = compute_tab_surface_for_presentation(
+                            &app,
+                            &runtimes,
+                            target,
+                            area,
+                            true,
+                            cell_size,
+                            TabSurfacePresentation::Borderless,
+                        );
+                        assert_eq!(layout.pane_infos.len(), 1);
+                        let pane = &layout.pane_infos[0];
+                        assert_eq!(pane.id, focused);
+                        assert_eq!(pane.rect, area);
+                        assert_eq!(pane.inner_rect, area);
+                        assert_eq!(pane.borders, Borders::NONE);
+                        assert_eq!(pane.scrollbar_rect, None);
+                        assert!(layout.split_borders.is_empty());
+                        assert_eq!(rt.current_size(), (12, 40));
+                        assert_eq!(rt.pixel_size(), Some((320, 192)));
+                        resize_tab_surface(&app, &runtimes, 0, 0, area, cell_size);
+                        assert_eq!(rt.current_size(), (normal_inner.height, normal_inner.width));
+                        resize_tab_surface_for_presentation(
+                            &app,
+                            &runtimes,
+                            0,
+                            0,
+                            area,
+                            cell_size,
+                            TabSurfacePresentation::Borderless,
+                        );
+                        assert_eq!(rt.current_size(), (12, 40));
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn borderless_surface_does_not_flatten_prezoom_multipane_or_resize_direct_attach() {
+        let mut workspace = Workspace::test_new("borderless");
+        let focused = workspace.test_split(Direction::Horizontal);
+        workspace.insert_test_runtime(
+            focused,
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(20, 8, b"LOCKED"),
+        );
+        let mut app = AppState::test_new();
+        app.workspaces = vec![workspace];
+        let terminal_id = app.workspaces[0].tabs[0]
+            .terminal_id(focused)
+            .unwrap()
+            .clone();
+        app.direct_attach_resize_locks.insert(terminal_id);
+        let runtimes = TerminalRuntimeRegistry::new();
+        let area = Rect::new(0, 0, 40, 12);
+        let target = Some(TabSurfaceTarget {
+            workspace_index: 0,
+            tab_index: 0,
+        });
+        let cells = crate::kitty_graphics::HostCellSize::default();
+        let normal = compute_tab_surface_for(&app, &runtimes, target, area, false, cells);
+        let prezoom = compute_tab_surface_for_presentation(
+            &app,
+            &runtimes,
+            target,
+            area,
+            true,
+            cells,
+            TabSurfacePresentation::Borderless,
+        );
+        for (normal, prezoom) in normal.pane_infos.iter().zip(&prezoom.pane_infos) {
+            assert_eq!(normal.id, prezoom.id);
+            assert_eq!(normal.rect, prezoom.rect);
+            assert_eq!(normal.inner_rect, prezoom.inner_rect);
+            assert_eq!(normal.borders, prezoom.borders);
+        }
+        assert_eq!(prezoom.pane_infos.len(), 2);
+        assert!(!prezoom.split_borders.is_empty());
+        app.workspaces[0].tabs[0].zoomed = true;
+        let layout = compute_tab_surface_for_presentation(
+            &app,
+            &runtimes,
+            target,
+            area,
+            true,
+            cells,
+            TabSurfacePresentation::Borderless,
+        );
+        assert_eq!(layout.pane_infos[0].inner_rect, area);
+        resize_tab_surface_for_presentation(
+            &app,
+            &runtimes,
+            0,
+            0,
+            area,
+            cells,
+            TabSurfacePresentation::Borderless,
+        );
+        assert_eq!(
+            app.runtime_for_pane_in_workspace(&runtimes, 0, focused)
+                .unwrap()
+                .current_size(),
+            (8, 20)
+        );
+    }
+
+    #[tokio::test]
+    async fn borderless_surface_render_cursor_and_hyperlinks_use_full_content_area() {
+        let mut workspace = Workspace::test_new("borderless");
+        let focused = workspace.tabs[0].root_pane;
+        workspace.insert_test_runtime(
+            focused,
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(
+                40,
+                12,
+                b"\x1b]8;;https://example.com/full\x1b\\EDGE\x1b]8;;\x1b\\",
+            ),
+        );
+        let mut app = AppState::test_new();
+        app.workspaces = vec![workspace];
+        app.active = Some(0);
+        let runtimes = TerminalRuntimeRegistry::new();
+        let area = Rect::new(0, 0, 40, 12);
+        let layout = compute_tab_surface_for_presentation(
+            &app,
+            &runtimes,
+            Some(TabSurfaceTarget {
+                workspace_index: 0,
+                tab_index: 0,
+            }),
+            area,
+            true,
+            crate::kitty_graphics::HostCellSize::default(),
+            TabSurfacePresentation::Borderless,
+        );
+        let view = TabSurfaceView {
+            target: layout.target,
+            pane_infos: &layout.pane_infos,
+            split_borders: &layout.split_borders,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        terminal
+            .draw(|frame| render_tab_surface(&app, &runtimes, view, frame))
+            .unwrap();
+        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "E");
+        assert_eq!(terminal.backend().buffer()[(39, 11)].symbol(), " ");
+        let cursor = tab_surface_cursor(&app, &runtimes, view).unwrap();
+        assert_eq!((cursor.x, cursor.y), (4, 0));
+        let links = tab_surface_hyperlinks(&app, &runtimes, view);
+        assert!(links
+            .iter()
+            .any(|(point, _, uri)| *point == (0, 0) && uri == "https://example.com/full"));
+    }
 
     #[tokio::test]
     async fn explicit_surface_layout_drives_render_cursor_and_hyperlinks() {
