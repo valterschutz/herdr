@@ -403,6 +403,7 @@ pub struct Keybinds {
     pub resize_pane_up: ActionKeybinds,
     pub resize_pane_right: ActionKeybinds,
     pub toggle_sidebar: ActionKeybinds,
+    pub toggle_tab_bar: ActionKeybinds,
     pub custom_commands: Vec<CustomCommandKeybind>,
 }
 
@@ -586,6 +587,7 @@ impl Config {
             resize_pane_up: empty_action!(),
             resize_pane_right: empty_action!(),
             toggle_sidebar: empty_action!(),
+            toggle_tab_bar: empty_action!(),
             custom_commands: Vec::new(),
         };
 
@@ -734,6 +736,7 @@ impl Config {
             apply_action!(keybinds.resize_pane_up, resize_pane_up, source);
             apply_action!(keybinds.resize_pane_right, resize_pane_right, source);
             apply_action!(keybinds.toggle_sidebar, toggle_sidebar, source);
+            apply_action!(keybinds.toggle_tab_bar, toggle_tab_bar, source);
 
             if source == field_source!(indexed) {
                 append_legacy_indexed_bindings(
@@ -1701,6 +1704,30 @@ next_tab = "prefix+n"
     fn back_and_forth_keybinds_are_unset_by_default() {
         let kb = Config::default().keybinds();
         assert!(kb.last_pane.bindings.is_empty());
+    }
+
+    #[test]
+    fn toggle_tab_bar_is_unset_by_default_and_parses_a_binding() {
+        assert!(Config::default()
+            .keybinds()
+            .toggle_tab_bar
+            .bindings
+            .is_empty());
+
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+toggle_tab_bar = "prefix+t"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            binding_triggers(&config.keybinds().toggle_tab_bar),
+            vec![BindingTrigger::Prefix((
+                KeyCode::Char('t'),
+                KeyModifiers::empty()
+            ))]
+        );
     }
 
     #[test]

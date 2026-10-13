@@ -192,6 +192,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # resize_pane_up = ""     # optional, e.g. "ctrl+shift+alt+up"
 # resize_pane_right = ""  # optional, e.g. "ctrl+shift+alt+right"
 # toggle_sidebar = "prefix+b"
+# toggle_tab_bar = ""     # optional, unset by default; bind e.g. "prefix+t" to show or hide the tab bar
 
 # Navigate-mode movement. These local shortcuts win while navigate mode is open.
 # They are independent from focus_pane_*. Do not include prefix+, esc, enter, tab, or 1..9 here.
@@ -314,6 +315,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Hide the tab row when a workspace has exactly one tab.
 # New tabs can still be created with the configured keybinding.
 # hide_tab_bar_when_single_tab = false
+
+# Start with the desktop tab row hidden. Bind keys.toggle_tab_bar to show or hide it.
+# The last toggle is remembered and wins over this setting on later launches.
+# tab_bar_start_hidden = false
 
 # Desktop tab row placement: "top" or "bottom".
 # tab_bar_position = "top"
