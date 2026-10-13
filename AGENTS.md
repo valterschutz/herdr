@@ -131,14 +131,24 @@ After Can confirms the change is integrated, update the shared checkout, remove 
 
 ## Testing
 
-Use `just` recipes by default instead of invoking cargo or scripts directly.
+Use focused tests by default, with `just` recipes instead of invoking cargo or
+scripts directly when available. Before running tests, select a bounded plan for
+the changed behavior, affected modules, and protected contracts, plus relevant
+formatting/lint checks. After a fix, rerun only the affected checks.
 
 ```bash
-just test               # cargo nextest + maintenance script tests
-just check              # formatting check + cargo nextest + maintenance script tests
+just test-one <filter>  # focused cargo nextest tests
 ```
 
-Run `just check` before committing unless Can explicitly accepts narrower validation. Do not bypass failing checks; fix the failure or explain exactly why a narrower check is enough.
+The full suites can take multiple hours. Run `just test`, `just check`, or
+equivalent unfiltered Cargo/nextest suites only with explicit human approval;
+routine edits, review rounds, and commits do not grant that approval. If the
+change's risk warrants broader validation, propose it and ask first. Explicit
+release validation workflows below remain unchanged.
+
+Fix failures introduced by the change. Report exact validation commands and
+results, skipped checks, and unresolved failures or environment limitations.
+Passing focused checks does not establish that the full suite passed.
 
 Windows MSVC cross-compilation from Unix requires SDK/CRT headers and libraries.
 Install `xwin` with `cargo install xwin --locked`, then run
