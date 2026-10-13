@@ -67,6 +67,13 @@ pub struct ClientShellSurfaceSetParams {
     pub active: bool,
 }
 
+/// Connection-local presentation for the currently selected tab.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ClientSurfacePresentationSetParams {
+    pub tab_id: String,
+    pub borderless: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SplitDirection {

@@ -73,6 +73,8 @@ pub enum Method {
     ClientWindowTitleClear(EmptyParams),
     #[serde(rename = "client_shell.surface.set")]
     ClientShellSurfaceSet(ClientShellSurfaceSetParams),
+    #[serde(rename = "client.surface.presentation.set")]
+    ClientSurfacePresentationSet(ClientSurfacePresentationSetParams),
     #[serde(rename = "session.snapshot")]
     SessionSnapshot(EmptyParams),
     #[serde(rename = "workspace.create")]

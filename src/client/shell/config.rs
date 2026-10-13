@@ -394,6 +394,14 @@ impl ClientShellConfig {
         tab_count: usize,
         sidebar_width: u16,
     ) -> ClientShellLayout {
+        if maximized {
+            return ClientShellLayout {
+                sidebar: Rect::default(),
+                tab_bar: Rect::default(),
+                mobile_header: Rect::default(),
+                pane_surface: Rect::new(0, 0, cols, rows),
+            };
+        }
         if cols <= self.mobile_width_threshold {
             let header_height = rows.min(2);
             return ClientShellLayout {

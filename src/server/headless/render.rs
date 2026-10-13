@@ -451,13 +451,15 @@ impl HeadlessServer {
             if changed {
                 if let Some(target) = self.shell_target_for_client(*client_id) {
                     let area = Rect::new(0, 0, *cols, *rows);
-                    let layout = crate::ui::compute_tab_surface_for(
+                    let presentation = self.shell_presentation_for_client(*client_id, Some(target));
+                    let layout = crate::ui::compute_tab_surface_for_presentation(
                         &self.app.state,
                         &self.app.terminal_runtimes,
                         Some(target),
                         area,
                         false,
                         *cell_size,
+                        presentation,
                     );
                     if layout.pane_infos.iter().any(|pane| {
                         self.app
@@ -471,7 +473,7 @@ impl HeadlessServer {
                     }) {
                         continue;
                     }
-                    crate::ui::resize_tab_surface(
+                    crate::ui::resize_tab_surface_for_presentation(
                         &self.app.state,
                         &self.app.terminal_runtimes,
                         target.workspace_index,
@@ -482,6 +484,7 @@ impl HeadlessServer {
                         } else {
                             crate::kitty_graphics::HostCellSize::default()
                         },
+                        presentation,
                     );
                 }
             }
@@ -520,6 +523,7 @@ impl HeadlessServer {
                 } else {
                     crate::kitty_graphics::HostCellSize::default()
                 };
+                let presentation = self.shell_presentation_for_client(client_id, shell_target);
                 let result = render_client_shell_pane_surface(
                     &mut self.app,
                     shell_target,
@@ -529,6 +533,7 @@ impl HeadlessServer {
                     render_cell_size,
                     &shell_graphics_delivery,
                     client_id,
+                    presentation,
                 );
                 crate::render_prof::duration_since(
                     "full_render.render_tab_surface_virtual",

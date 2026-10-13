@@ -30,6 +30,7 @@ impl HeadlessServer {
                 return Some((false, client.shell_projection_revision));
             }
             client.shell_surface_active = active;
+            client.shell_borderless_tab_id = None;
             client.request_repaint();
             client.shell_graphics_delivery = Default::default();
             // The client drops target effects while its old source frame is frozen. Reset the

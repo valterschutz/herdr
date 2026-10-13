@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn dispatch_client_shell_actions(
-    actions: Vec<shell::ClientShellAction>,
+    mut actions: Vec<shell::ClientShellAction>,
     endpoint_commands: &mut endpoint_commands::EndpointCommands,
     endpoints: &mut endpoint::EndpointRegistry,
     mut shell: Option<&mut shell::ClientShellState>,
@@ -10,6 +10,13 @@ pub(super) fn dispatch_client_shell_actions(
 ) -> Result<(Vec<crossterm::event::MouseEvent>, bool), ClientError> {
     let mut replay_mouse = Vec::new();
     let mut repaint = false;
+    if endpoints.active_surface_available() {
+        if let Some(shell) = shell.as_deref_mut() {
+            let presentation_actions = shell.sync_surface_presentation();
+            repaint |= !presentation_actions.is_empty();
+            actions.extend(presentation_actions);
+        }
+    }
     for action in actions {
         match action {
             shell::ClientShellAction::Endpoint {
@@ -435,13 +442,30 @@ pub(super) fn complete_endpoint_activation(
     };
     state.unfreeze_presentation();
     if successor.is_none() {
-        let active_endpoint = endpoints.active_id().clone();
-        let cancelled = endpoint_commands.send_next(&active_endpoint, endpoints);
+        // Surface activation clears the server's connection-local policy, including rollback
+        // to the same source. Resend a surviving maximize lifetime in the new surface epoch.
         if let Some(shell) = state.shell.as_mut() {
-            for request_id in cancelled {
-                shell.cancel_endpoint_request(&request_id);
-            }
+            shell.reset_surface_presentation_epoch();
         }
+        if let Some(shell) = state.shell.as_ref() {
+            let resize = client_shell_resize_message(
+                shell,
+                state.reported_size.0,
+                state.reported_size.1,
+                state.reported_cell_size.0,
+                state.reported_cell_size.1,
+                state.pixel_geometry_exact,
+            );
+            let _ = write_to_server(endpoints, &resize);
+        }
+        dispatch_client_shell_actions(
+            Vec::new(),
+            endpoint_commands,
+            endpoints,
+            state.shell.as_mut(),
+            &mut state.detached_process_children,
+            &mut None,
+        )?;
     }
     let (cleanup, frame) = {
         let shell = state.shell.as_mut().expect("checked client shell");
@@ -619,6 +643,7 @@ pub(super) fn install_client_shell_snapshot(
     snapshot: Box<crate::protocol::ClientShellSnapshot>,
     projection_pending: bool,
     endpoints: &mut endpoint::EndpointRegistry,
+    endpoint_commands: &mut endpoint_commands::EndpointCommands,
     prefix_input_source: &mut impl crate::platform::PrefixInputSource,
 ) -> Result<(), ClientError> {
     let Some(connection) = endpoints.connection(endpoint_id) else {
@@ -627,7 +652,7 @@ pub(super) fn install_client_shell_snapshot(
     let generation = connection.generation;
     let project_snapshot =
         !projection_pending && endpoints.active_id() == endpoint_id && connection.surface_active;
-    let (composed, resize, graphics_cleanup) = if let Some(shell) = &mut state.shell {
+    let (mut composed, resize, graphics_cleanup) = if let Some(shell) = &mut state.shell {
         let waits_for_selected_surface = projection_pending
             || (endpoints.active_id() == endpoint_id
                 && !project_snapshot
@@ -668,6 +693,22 @@ pub(super) fn install_client_shell_snapshot(
     state.present_graphics(&graphics_cleanup);
     if let Some(resize) = resize {
         endpoints.send_to(endpoint_id, &resize);
+    }
+    if project_snapshot {
+        let (_, repaint) = dispatch_client_shell_actions(
+            Vec::new(),
+            endpoint_commands,
+            endpoints,
+            state.shell.as_mut(),
+            &mut state.detached_process_children,
+            &mut None,
+        )?;
+        if repaint {
+            composed = state
+                .shell
+                .as_mut()
+                .and_then(|shell| shell.compose(state.reported_size.0, state.reported_size.1));
+        }
     }
     if let Some(frame) = composed {
         if projection_pending {

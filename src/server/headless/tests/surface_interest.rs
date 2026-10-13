@@ -866,3 +866,207 @@ async fn two_headless_servers_drive_atomic_endpoint_handoff() {
     shutdown_test_runtimes(&mut source_server);
     shutdown_test_runtimes(&mut target_server);
 }
+
+fn set_test_presentation(
+    server: &mut HeadlessServer,
+    client_id: u64,
+    tab_id: &str,
+    borderless: bool,
+) -> bool {
+    server.handle_server_event(ServerEvent::ClientShellEndpointRequest {
+        client_id,
+        boot_id: server.client_shell_boot_id.clone(),
+        request: Box::new(api::schema::Request {
+            id: format!("presentation-{client_id}-{borderless}"),
+            method: api::schema::Method::ClientSurfacePresentationSet(
+                api::schema::ClientSurfacePresentationSetParams {
+                    tab_id: tab_id.into(),
+                    borderless,
+                },
+            ),
+        }),
+    })
+}
+
+#[tokio::test]
+async fn borderless_presentation_is_per_client_and_only_controller_resizes() {
+    let mut server = test_headless_server();
+    let pane_id = install_shared_view_test_runtime(&mut server);
+    let tab_id = server.app.public_tab_id(0, 0).unwrap();
+    let (_control, render) = connect_test_shell(&mut server, 7, 80, 23);
+    let (_other_control, other_render) = connect_test_shell(&mut server, 8, 60, 18);
+    server.tab_geometry_controllers.insert(tab_id.clone(), 7);
+    server.reapply_controlled_shell_tab_geometry(true);
+    let size = || {
+        server
+            .app
+            .state
+            .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, pane_id)
+            .unwrap()
+            .current_size()
+    };
+    assert_eq!(size(), (23, 79));
+    assert!(set_test_presentation(&mut server, 8, &tab_id, true));
+    assert_eq!(
+        server
+            .app
+            .state
+            .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, pane_id)
+            .unwrap()
+            .current_size(),
+        (23, 79)
+    );
+    server.render_and_stream();
+    let normal = recv_pane_surface(&render, "normal viewer");
+    let borderless = recv_pane_surface(&other_render, "borderless viewer");
+    assert_eq!(normal.panes[0].inner_rect.width, 79);
+    assert_eq!(
+        borderless.panes[0].inner_rect,
+        crate::protocol::SurfaceRect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 18
+        }
+    );
+    assert!(set_test_presentation(&mut server, 7, &tab_id, true));
+    assert_eq!(
+        server
+            .app
+            .state
+            .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, pane_id)
+            .unwrap()
+            .current_size(),
+        (23, 80)
+    );
+    // Alternate-screen repair must not reintroduce the primary-screen gutter.
+    write_shared_test_pane(&mut server, pane_id, b"\x1b[?1049h");
+    server.render_and_stream();
+    let _ = recv_pane_surface(&render, "alternate screen");
+    write_shared_test_pane(&mut server, pane_id, b"\x1b[?1049l");
+    server.render_and_stream();
+    let _ = recv_pane_surface(&render, "primary screen");
+    assert_eq!(
+        server
+            .app
+            .state
+            .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, pane_id)
+            .unwrap()
+            .current_size(),
+        (23, 80)
+    );
+    assert!(set_test_presentation(&mut server, 7, &tab_id, false));
+    assert_eq!(
+        server
+            .app
+            .state
+            .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, pane_id)
+            .unwrap()
+            .current_size(),
+        (23, 79)
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn borderless_presentation_resize_before_action_background_tabs_and_reset() {
+    let mut server = test_headless_server();
+    let focused = install_shared_view_test_runtime(&mut server);
+    let ws = &mut server.app.state.workspaces[0];
+    let background_tab = ws.test_add_tab(Some("background"));
+    let background = ws.tabs[background_tab].root_pane;
+    ws.insert_test_runtime(
+        background,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"BACKGROUND"),
+    );
+    ws.active_tab = 0;
+    let tab_id = server.app.public_tab_id(0, 0).unwrap();
+    let other_tab_id = server.app.public_tab_id(0, background_tab).unwrap();
+    let (_control, _render) = connect_test_shell(&mut server, 7, 80, 23);
+    assert!(server.handle_server_event(ServerEvent::ClientShellResize {
+        client_id: 7,
+        surface_cols: 100,
+        surface_rows: 30,
+        cell_width_px: 8,
+        cell_height_px: 16,
+        pixel_mouse: false
+    }));
+    assert!(set_test_presentation(&mut server, 7, &tab_id, true));
+    let rt = server
+        .app
+        .state
+        .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, focused)
+        .unwrap();
+    assert_eq!(rt.current_size(), (30, 100));
+    assert_eq!(rt.pixel_size(), Some((800, 480)));
+    assert_eq!(
+        server
+            .app
+            .state
+            .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, background)
+            .unwrap()
+            .current_size(),
+        (30, 99)
+    );
+    let revision = server.clients[&7].shell_projection_revision;
+    assert!(!set_test_presentation(&mut server, 7, &other_tab_id, true));
+    assert_eq!(server.clients[&7].shell_projection_revision, revision);
+    assert_eq!(
+        server.clients[&7].shell_borderless_tab_id.as_deref(),
+        Some(tab_id.as_str())
+    );
+    // Switching away and back cannot revive a stale tab's presentation.
+    assert!(server.focus_shell_client_on_tab(7, &other_tab_id));
+    assert!(server.clients[&7].shell_borderless_tab_id.is_none());
+    assert!(server.focus_shell_client_on_tab(7, &tab_id));
+    assert_eq!(
+        server.shell_presentation_for_client(7, server.shell_target_for_client(7)),
+        crate::ui::TabSurfacePresentation::Normal
+    );
+    assert!(set_test_presentation(&mut server, 7, &tab_id, true));
+    assert!(server.set_client_shell_surface_active(7, false).is_some());
+    assert!(server.clients[&7].shell_borderless_tab_id.is_none());
+    assert!(!set_test_presentation(&mut server, 7, &tab_id, true));
+    assert!(server.set_client_shell_surface_active(7, true).is_some());
+    assert_eq!(
+        server
+            .app
+            .state
+            .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, focused)
+            .unwrap()
+            .current_size(),
+        (30, 99)
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[test]
+fn borderless_presentation_is_advertised_as_new_json_method_in_existing_envelope() {
+    assert!(
+        crate::server::client_commands::supported_client_shell_method_names()
+            .contains(&"client.surface.presentation.set")
+    );
+    let request = api::schema::Request {
+        id: "presentation".into(),
+        method: api::schema::Method::ClientSurfacePresentationSet(
+            api::schema::ClientSurfacePresentationSetParams {
+                tab_id: "tab_1".into(),
+                borderless: true,
+            },
+        ),
+    };
+    let encoded = serde_json::to_string(&request).unwrap();
+    let message = crate::protocol::ClientMessage::ClientShellEndpointRequest {
+        boot_id: "boot".into(),
+        request: encoded.clone(),
+    };
+    let bytes = bincode::serde::encode_to_vec(&message, bincode::config::standard()).unwrap();
+    let (decoded, _): (crate::protocol::ClientMessage, usize) =
+        bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
+    assert!(
+        matches!(decoded, crate::protocol::ClientMessage::ClientShellEndpointRequest { request, .. } if request == encoded)
+    );
+    assert!(
+        matches!(serde_json::from_str::<api::schema::Request>(&encoded).unwrap().method, api::schema::Method::ClientSurfacePresentationSet(params) if params.tab_id == "tab_1" && params.borderless)
+    );
+}

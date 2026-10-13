@@ -946,9 +946,7 @@ impl ClientShellState {
         mouse: crossterm::event::MouseEvent,
         outcome: &mut ClientShellInput,
     ) -> bool {
-        let mobile = self
-            .last_composed_size
-            .is_some_and(|(cols, rows)| !self.layout(cols, rows).mobile_header.is_empty());
+        let mobile = self.mobile_layout_active();
         if !mobile || self.overlay.is_some() {
             return false;
         }

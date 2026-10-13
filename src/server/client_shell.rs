@@ -283,6 +283,7 @@ pub(super) enum SurfaceRenderDeferred {
     Changed,
 }
 
+#[cfg(test)]
 pub(super) fn render_pane_surface(
     app: &mut app::App,
     target: Option<crate::ui::TabSurfaceTarget>,
@@ -293,13 +294,38 @@ pub(super) fn render_pane_surface(
     graphics_delivery: &crate::kitty_graphics::surface::DeliveryCache,
     client_id: u64,
 ) -> Result<RenderedPaneSurface, SurfaceRenderDeferred> {
-    let layout = crate::ui::compute_tab_surface_for(
+    render_pane_surface_for_presentation(
+        app,
+        target,
+        area,
+        resize_panes,
+        show_popup,
+        cell_size,
+        graphics_delivery,
+        client_id,
+        crate::ui::TabSurfacePresentation::Normal,
+    )
+}
+
+pub(super) fn render_pane_surface_for_presentation(
+    app: &mut app::App,
+    target: Option<crate::ui::TabSurfaceTarget>,
+    area: Rect,
+    resize_panes: bool,
+    show_popup: bool,
+    cell_size: crate::kitty_graphics::HostCellSize,
+    graphics_delivery: &crate::kitty_graphics::surface::DeliveryCache,
+    client_id: u64,
+    presentation: crate::ui::TabSurfacePresentation,
+) -> Result<RenderedPaneSurface, SurfaceRenderDeferred> {
+    let layout = crate::ui::compute_tab_surface_for_presentation(
         &app.state,
         &app.terminal_runtimes,
         target,
         area,
         resize_panes,
         cell_size,
+        presentation,
     );
     let mut content_revisions_before = std::collections::HashMap::new();
     if let Some(target) = target {

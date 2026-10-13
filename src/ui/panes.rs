@@ -318,16 +318,26 @@ pub(super) fn resize_tab_panes(
     tab: &crate::workspace::Tab,
     area: Rect,
     cell_size: crate::kitty_graphics::HostCellSize,
+    presentation: super::tab_surface::TabSurfacePresentation,
 ) {
     let multi_pane = tab.layout.pane_count() > 1;
 
-    if tab.zoomed {
+    let borderless = presentation.borderless(tab);
+    if tab.zoomed || borderless {
         let focused_id = tab.layout.focused();
         if let Some((terminal_id, rt)) =
             runtime_for_tab_pane(app, terminal_runtimes, workspace_index, tab, focused_id)
         {
-            let pane_inner = pane_inner_rect(area, zoomed_pane_borders(app, multi_pane));
-            let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
+            let pane_inner = pane_inner_rect(
+                area,
+                if borderless {
+                    Borders::NONE
+                } else {
+                    zoomed_pane_borders(app, multi_pane)
+                },
+            );
+            let inner_rect =
+                terminal_inner_rect(rt, pane_inner, app.pane_scrollbars && !borderless);
             if !app.direct_attach_resize_locks.contains(terminal_id) {
                 rt.resize(
                     inner_rect.height,
@@ -351,7 +361,8 @@ pub(super) fn resize_tab_panes(
         if let Some((terminal_id, rt)) =
             runtime_for_tab_pane(app, terminal_runtimes, workspace_index, tab, info.id)
         {
-            let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
+            let inner_rect =
+                terminal_inner_rect(rt, pane_inner, app.pane_scrollbars && !borderless);
             if !app.direct_attach_resize_locks.contains(terminal_id) {
                 rt.resize(
                     inner_rect.height,
@@ -373,6 +384,7 @@ pub(super) fn compute_pane_infos_for_tab(
     area: Rect,
     resize_panes: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
+    presentation: super::tab_surface::TabSurfacePresentation,
 ) -> Vec<PaneInfo> {
     let Some(tab) = app
         .workspaces
@@ -384,15 +396,20 @@ pub(super) fn compute_pane_infos_for_tab(
 
     let multi_pane = tab.layout.pane_count() > 1;
 
-    if tab.zoomed {
+    let borderless = presentation.borderless(tab);
+    if tab.zoomed || borderless {
         let focused_id = tab.layout.focused();
-        let borders = zoomed_pane_borders(app, multi_pane);
+        let borders = if borderless {
+            Borders::NONE
+        } else {
+            zoomed_pane_borders(app, multi_pane)
+        };
         let pane_inner = pane_inner_rect(area, borders);
         let mut inner_rect = pane_inner;
         let mut scrollbar_rect = None;
         if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, focused_id) {
             (inner_rect, scrollbar_rect) =
-                stable_scrollbar_gutter(rt, pane_inner, app.pane_scrollbars);
+                stable_scrollbar_gutter(rt, pane_inner, app.pane_scrollbars && !borderless);
             if resize_panes
                 && tab.terminal_id(focused_id).is_some_and(|terminal_id| {
                     !app.direct_attach_resize_locks.contains(terminal_id)
@@ -478,6 +495,7 @@ fn compute_pane_infos(
         area,
         resize_panes,
         cell_size,
+        super::tab_surface::TabSurfacePresentation::Normal,
     )
 }
 

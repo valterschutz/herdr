@@ -186,6 +186,7 @@ impl ClientShellState {
             return None;
         }
         let layout = self.layout(cols, rows);
+        let mobile = cols <= self.config.mobile_width_threshold;
         if self.last_tab_bar_width != Some(layout.tab_bar.width) {
             self.last_tab_bar_width = Some(layout.tab_bar.width);
             self.reveal_focused_tab = true;
@@ -307,7 +308,7 @@ impl ClientShellState {
         if !self.config.mouse_capture {
             self.hits.pane_splits.clear();
         }
-        let mode_bar_area = if layout.mobile_header.is_empty()
+        let mode_bar_area = if !mobile
             && self.config.tab_bar_position == TabBarPositionConfig::Bottom
             && !layout.tab_bar.is_empty()
         {
@@ -315,9 +316,8 @@ impl ClientShellState {
         } else {
             layout.pane_surface
         };
-        let mobile_navigate_panel = !layout.mobile_header.is_empty()
-            && self.mode == ClientShellMode::Navigate
-            && self.endpoint_error.is_none();
+        let mobile_navigate_panel =
+            mobile && self.mode == ClientShellMode::Navigate && self.endpoint_error.is_none();
         let mode_bar = if mobile_navigate_panel || self.overlay.is_some() {
             None
         } else {
@@ -467,7 +467,7 @@ impl ClientShellState {
             let cursor = frame.cursor.clone();
             let mut composed = frame.to_ratatui_buffer()?;
             if let Some(diagnostic) = self.config_diagnostic.as_deref() {
-                let diagnostic_area = if layout.mobile_header.is_empty() {
+                let diagnostic_area = if !mobile {
                     Rect::new(0, 0, cols, rows)
                 } else {
                     layout.pane_surface
@@ -492,7 +492,7 @@ impl ClientShellState {
                 1
             });
             if let Some(notice) = self.visible_endpoint_notice.as_ref() {
-                self.hits.notification_toast = if layout.mobile_header.is_empty() {
+                self.hits.notification_toast = if !mobile {
                     endpoint_notices::render_notice(
                         &mut composed,
                         Rect::new(0, 0, cols, rows),
@@ -510,7 +510,7 @@ impl ClientShellState {
                     )
                 };
             } else if let Some(notification) = self.visible_notification.as_ref() {
-                self.hits.notification_toast = if layout.mobile_header.is_empty() {
+                self.hits.notification_toast = if !mobile {
                     notifications::render_visible_notification(
                         &mut composed,
                         Rect::new(0, 0, cols, rows),
@@ -536,7 +536,7 @@ impl ClientShellState {
             let cursor = frame.cursor.clone();
             let mut composed = frame.to_ratatui_buffer()?;
             let base_offset = u16::from(has_config_diagnostic);
-            let feedback_area = if layout.mobile_header.is_empty() {
+            let feedback_area = if !mobile {
                 layout.pane_surface
             } else {
                 Rect::new(0, 0, cols, rows)
@@ -594,10 +594,7 @@ impl ClientShellState {
                 });
             }
         }
-        if !layout.mobile_header.is_empty()
-            && self.mode == ClientShellMode::Navigate
-            && self.overlay.is_none()
-        {
+        if mobile && self.mode == ClientShellMode::Navigate && self.overlay.is_none() {
             let mut composed = frame.to_ratatui_buffer()?;
             occlusion.cover(composed.area);
             super::mobile::render_mobile_switcher(

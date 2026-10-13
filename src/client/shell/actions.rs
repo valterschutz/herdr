@@ -340,6 +340,58 @@ impl ClientShellState {
         self.push_endpoint_method(Method::PaneZoom(PaneZoomParams { pane_id, mode }), outcome);
     }
 
+    /// Synchronize the maximize lifetime independently of host-size changes. The command lane
+    /// orders this after zoom/navigation; the response revision fences old presentation frames.
+    pub(crate) fn sync_surface_presentation(&mut self) -> Vec<ClientShellAction> {
+        self.sync_surface_presentation_at(std::time::Instant::now())
+    }
+
+    pub(super) fn sync_surface_presentation_at(
+        &mut self,
+        now: std::time::Instant,
+    ) -> Vec<ClientShellAction> {
+        let desired = self
+            .maximized()
+            .then(|| self.focused_tab().map(|tab| tab.tab_id.clone()))
+            .flatten();
+        if desired == self.sent_borderless_tab_id
+            && (!self.surface_presentation_dirty
+                || self.presentation_request_id.is_some()
+                || self
+                    .surface_presentation_retry_at
+                    .is_some_and(|retry_at| now < retry_at))
+        {
+            return Vec::new();
+        }
+        let Some(tab) = self.focused_tab() else {
+            return Vec::new();
+        };
+        let method = crate::api::schema::Method::ClientSurfacePresentationSet(
+            crate::api::schema::ClientSurfacePresentationSetParams {
+                tab_id: tab.tab_id.clone(),
+                borderless: desired.is_some(),
+            },
+        );
+        // This fork targets paired updated endpoints; no legacy fallback or feature notice.
+        if !self.supports_endpoint_method(&method) {
+            return Vec::new();
+        }
+        let mut outcome = ClientShellInput::default();
+        if self.push_endpoint_method_with_kind(
+            method,
+            PendingEndpointKind::SurfacePresentation,
+            &mut outcome,
+        ) {
+            self.sent_borderless_tab_id = desired;
+            self.presentation_request_id = outcome.actions.iter().find_map(|action| match action {
+                ClientShellAction::Endpoint { request, .. } => Some(request.id.clone()),
+                _ => None,
+            });
+            self.invalidate_pane_surface();
+        }
+        outcome.actions
+    }
+
     pub(super) fn push_endpoint_method(
         &mut self,
         method: crate::api::schema::Method,
@@ -551,6 +603,35 @@ impl ClientShellState {
         {
             return (false, Vec::new());
         }
+        if matches!(pending.kind, PendingEndpointKind::SurfacePresentation) {
+            if self.presentation_request_id.as_deref() == Some(request_id) {
+                self.presentation_request_id = None;
+                if let Ok(crate::api::schema::ResponseResult::ClientSurfacePresentationSet {
+                    projection_revision,
+                }) = &result
+                {
+                    self.surface_presentation_dirty = false;
+                    self.surface_presentation_retry_at = None;
+                    self.presentation_revision_floor = *projection_revision;
+                    if let Some(surface) = self.pending_pane_surface.take() {
+                        self.set_pane_surface(surface);
+                    }
+                } else {
+                    // The server may have applied a timed-out command, including a clear.
+                    // Keep that uncertainty distinct from acknowledged normal presentation.
+                    // Retry unchanged policy at most once per second, never directly from the
+                    // response callback; a new desired policy or connection epoch can proceed.
+                    self.surface_presentation_dirty = true;
+                    self.surface_presentation_retry_at =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+                    self.invalidate_pane_surface();
+                }
+            }
+            // Stale target/cancelled epochs are local outcomes, not presentation evidence.
+            if result.is_ok() {
+                return (true, Vec::new());
+            }
+        }
         if let PendingEndpointKind::PaneLinkResolve { target } = pending.kind {
             return self.complete_link_hover(target, result);
         }
@@ -605,7 +686,7 @@ impl ClientShellState {
             }
         }
         match pending.kind {
-            PendingEndpointKind::Generic => {}
+            PendingEndpointKind::Generic | PendingEndpointKind::SurfacePresentation => {}
             PendingEndpointKind::PaneLinkResolve { .. } => unreachable!("handled above"),
             PendingEndpointKind::ProductAnnouncementDismiss { version, id } => {
                 return match result {
