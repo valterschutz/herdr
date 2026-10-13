@@ -80,6 +80,132 @@ fn toggle_tab_bar_gives_the_tab_row_to_panes_and_is_remembered() {
     std::fs::remove_file(path).expect("remove client chrome preferences");
 }
 
+fn maximize_state() -> ClientShellState {
+    let config: Config =
+        toml::from_str("[keys]\nmaximize = \"prefix+E\"\ntoggle_tab_bar = \"prefix+t\"").unwrap();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.compose(106, 20).expect("composed frame");
+    state
+}
+
+fn press_prefixed(state: &mut ClientShellState, key: &[u8]) -> ClientShellInput {
+    state.handle_input_bytes(&[0x02]);
+    state.handle_input_bytes(key)
+}
+
+fn set_focused_tab_zoomed(state: &mut ClientShellState, zoomed: bool) {
+    let mut next = state.snapshot.as_deref().unwrap().clone();
+    next.revision += 1;
+    next.tabs[0].zoomed = zoomed;
+    state.set_snapshot(Box::new(next));
+}
+
+fn requested_zoom_mode(outcome: &ClientShellInput) -> crate::api::schema::PaneZoomMode {
+    outcome
+        .actions
+        .iter()
+        .find_map(|action| match action {
+            ClientShellAction::Endpoint { request, .. } => match &request.method {
+                crate::api::schema::Method::PaneZoom(params) => Some(params.mode),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("pane zoom request")
+}
+
+#[test]
+fn maximize_zooms_and_gives_the_whole_terminal_to_the_pane_until_unzoomed() {
+    let mut state = maximize_state();
+    let normal = state.layout(106, 20);
+    assert!(normal.sidebar.width > 0);
+    assert_eq!(normal.tab_bar.height, 1);
+
+    let outcome = press_prefixed(&mut state, b"E");
+    assert_eq!(
+        requested_zoom_mode(&outcome),
+        crate::api::schema::PaneZoomMode::On
+    );
+    assert!(outcome.resize);
+    let maximized = state.layout(106, 20);
+    assert_eq!(maximized.pane_surface, Rect::new(0, 0, 106, 20));
+    assert!(maximized.tab_bar.is_empty());
+
+    set_focused_tab_zoomed(&mut state, true);
+    assert!(state.maximized());
+
+    // An unzoom from anywhere, such as prefix+e, brings the chrome back.
+    set_focused_tab_zoomed(&mut state, false);
+    assert!(!state.maximized());
+    assert!(state.maximize.is_none());
+    assert_eq!(state.layout(106, 20), normal);
+}
+
+#[test]
+fn maximize_again_unzooms_and_restores_the_previous_chrome() {
+    let mut state = maximize_state();
+    state.sidebar_collapsed = true;
+    let normal = state.layout(106, 20);
+    set_focused_tab_zoomed(&mut state, true);
+
+    // Already zoomed: maximize only hides the chrome.
+    let outcome = press_prefixed(&mut state, b"E");
+    assert!(outcome.actions.is_empty());
+    assert!(state.maximized());
+
+    let outcome = press_prefixed(&mut state, b"E");
+    assert_eq!(
+        requested_zoom_mode(&outcome),
+        crate::api::schema::PaneZoomMode::Off
+    );
+    assert!(!state.maximized());
+    assert!(state.sidebar_collapsed);
+    assert!(!state.sidebar_collapsed_manual);
+    assert!(!state.tab_bar_hidden_manual);
+    set_focused_tab_zoomed(&mut state, false);
+    assert_eq!(state.layout(106, 20), normal);
+}
+
+#[test]
+fn chrome_toggles_leave_maximize_but_keep_the_zoom() {
+    let mut state = maximize_state();
+    press_prefixed(&mut state, b"E");
+    set_focused_tab_zoomed(&mut state, true);
+
+    let outcome = press_prefixed(&mut state, b"t");
+    assert!(outcome.actions.is_empty());
+    assert!(!state.maximized());
+    assert!(state.tab_bar_hidden);
+    let layout = state.layout(106, 20);
+    assert!(layout.sidebar.width > 0);
+    assert!(layout.tab_bar.is_empty());
+}
+
+#[test]
+fn focusing_another_tab_ends_maximize() {
+    let mut state = maximize_state();
+    press_prefixed(&mut state, b"E");
+    set_focused_tab_zoomed(&mut state, true);
+
+    let mut next = state.snapshot.as_deref().unwrap().clone();
+    next.revision += 1;
+    let mut other = next.tabs[0].clone();
+    other.tab_id = "tab_2".into();
+    other.zoomed = true;
+    next.tabs.push(other);
+    next.focused_tab_id = Some("tab_2".into());
+    state.set_snapshot(Box::new(next));
+    assert!(state.maximize.is_none());
+
+    let mut back = state.snapshot.as_deref().unwrap().clone();
+    back.revision += 1;
+    back.focused_tab_id = Some("tab_1".into());
+    state.set_snapshot(Box::new(back));
+    assert!(!state.maximized());
+}
+
 #[test]
 fn saved_tab_bar_toggle_wins_over_tab_bar_start_hidden() {
     let mut config = Config::default();

@@ -11,6 +11,7 @@ impl ClientShellState {
                 outcome.detach = true;
             }
             crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleSidebar) => {
+                self.maximize = None;
                 self.sidebar_collapsed = !self.sidebar_collapsed;
                 self.sidebar_collapsed_manual = true;
                 self.reveal_navigation_workspace = true;
@@ -20,12 +21,16 @@ impl ClientShellState {
                 self.persist_chrome_preferences(outcome);
             }
             crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleTabBar) => {
+                self.maximize = None;
                 self.tab_bar_hidden = !self.tab_bar_hidden;
                 self.tab_bar_hidden_manual = true;
                 self.invalidate_pane_surface();
                 outcome.repaint = true;
                 outcome.resize = true;
                 self.persist_chrome_preferences(outcome);
+            }
+            crate::input::KeybindMatch::Action(crate::input::KeybindAction::Maximize) => {
+                self.toggle_maximize(outcome);
             }
             crate::input::KeybindMatch::Action(action) => {
                 if self.workspace_preview_action_blocked()
@@ -298,6 +303,41 @@ impl ClientShellState {
             PendingEndpointKind::SelectionCopy,
             outcome,
         );
+    }
+
+    /// Maximize zooms through the server, but hiding the sidebar and tab bar is this client's own
+    /// presentation and leaves the saved sidebar and tab bar toggles untouched.
+    fn toggle_maximize(&mut self, outcome: &mut ClientShellInput) {
+        use crate::api::schema::{Method, PaneZoomMode, PaneZoomParams};
+
+        let mode = if self.maximized() {
+            self.maximize = None;
+            PaneZoomMode::Off
+        } else {
+            let Some(tab) = self.focused_tab() else {
+                return;
+            };
+            let zoomed = tab.zoomed;
+            self.maximize = Some(ClientMaximize {
+                tab_id: tab.tab_id.clone(),
+                zoom_seen: zoomed,
+            });
+            if zoomed {
+                self.invalidate_pane_surface();
+                outcome.repaint = true;
+                outcome.resize = true;
+                return;
+            }
+            PaneZoomMode::On
+        };
+        let pane_id = self
+            .snapshot
+            .as_deref()
+            .and_then(|snapshot| snapshot.focused_pane_id.clone());
+        self.invalidate_pane_surface();
+        outcome.repaint = true;
+        outcome.resize = true;
+        self.push_endpoint_method(Method::PaneZoom(PaneZoomParams { pane_id, mode }), outcome);
     }
 
     pub(super) fn push_endpoint_method(
