@@ -14,6 +14,8 @@ pub(super) struct AgentRow {
     pub(super) pane_id: String,
     pub(super) status: crate::api::schema::AgentStatus,
     pub(super) focused: bool,
+    /// One-based position among the rows `focus_agent` can reach.
+    pub(super) number: Option<usize>,
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
 }
 
@@ -242,6 +244,11 @@ pub(super) fn agent_rows(
     ordered_agent_pane_ids(snapshot, config.agent_panel_sort)
         .into_iter()
         .filter_map(|pane_id| agent_row(snapshot, &pane_id, config, machine))
+        .enumerate()
+        .map(|(position, row)| AgentRow {
+            number: Some(position + 1),
+            ..row
+        })
         .collect()
 }
 
@@ -314,6 +321,7 @@ pub(super) fn agent_row(
         pane_id: agent.pane_id.clone(),
         status: agent.agent_status,
         focused: agent.focused,
+        number: None,
         rows,
     })
 }
@@ -359,6 +367,7 @@ pub(super) fn render_agent_row(
         spans.extend(crate::ui::resolved_token_spans(
             tokens,
             icon,
+            row.number,
             status_style,
             name_style,
             secondary,

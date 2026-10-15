@@ -156,6 +156,7 @@ fn agent_rows(
         .flatten()
         .collect::<HashMap<_, _>>();
 
+    let mut online_count = 0;
     super::aggregate_navigation::aggregate_agent_rows(
         endpoints,
         active_endpoint_id,
@@ -163,9 +164,16 @@ fn agent_rows(
     )
     .into_iter()
     .filter_map(|row| {
+        // Number rows the way `online_agent_targets` indexes `focus_agent`:
+        // every online row counts, even one that renders nothing below.
+        let number = (!row.endpoint.stale()).then(|| {
+            online_count += 1;
+            online_count
+        });
         let key = (row.endpoint.endpoint_id.clone(), row.agent.pane_id.clone());
         let mut agent = rendered_rows.remove(&key)?;
         agent.focused &= row.endpoint.endpoint_id == active_endpoint_id;
+        agent.number = number;
         Some(EndpointAgentRow {
             endpoint_id: row.endpoint.endpoint_id.clone(),
             machine_label: row.endpoint.label.to_owned(),
