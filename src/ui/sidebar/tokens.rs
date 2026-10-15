@@ -12,6 +12,7 @@ pub(crate) struct ResolvedToken {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResolvedTokenKind {
     StateIcon,
+    Number,
     StateText(String),
     Machine(String),
     Workspace(String),
@@ -36,7 +37,7 @@ impl ResolvedTokenKind {
             | Self::TerminalTitle(value)
             | Self::Branch(value)
             | Self::Custom(value) => Some(value),
-            Self::StateIcon | Self::GitStatus { .. } => None,
+            Self::StateIcon | Self::Number | Self::GitStatus { .. } => None,
         }
     }
 }
@@ -79,6 +80,7 @@ pub(crate) fn agent_rows(
                     let (token, style) = configured.parts();
                     let kind = match token {
                         AgentSidebarToken::StateIcon => Some(ResolvedTokenKind::StateIcon),
+                        AgentSidebarToken::Number => Some(ResolvedTokenKind::Number),
                         AgentSidebarToken::StateText => {
                             Some(ResolvedTokenKind::StateText(state_text.to_string()))
                         }
@@ -144,6 +146,7 @@ pub(crate) fn space_rows(
                     let (token, style) = configured.parts();
                     let kind = match token {
                         SpaceSidebarToken::StateIcon => Some(ResolvedTokenKind::StateIcon),
+                        SpaceSidebarToken::Number => Some(ResolvedTokenKind::Number),
                         SpaceSidebarToken::StateText => {
                             Some(ResolvedTokenKind::StateText(context.state_text.to_string()))
                         }
@@ -178,8 +181,10 @@ pub(crate) fn space_rows(
 }
 
 pub(crate) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'static str {
-    if matches!(previous.kind, ResolvedTokenKind::StateIcon)
-        || matches!(current.kind, ResolvedTokenKind::GitStatus { .. })
+    if matches!(
+        previous.kind,
+        ResolvedTokenKind::StateIcon | ResolvedTokenKind::Number
+    ) || matches!(current.kind, ResolvedTokenKind::GitStatus { .. })
     {
         " "
     } else {
@@ -277,6 +282,7 @@ rows = [[{ token = "workspace", rules = [{ equals = "long-workspace-name", fg = 
             let spans = super::super::resolved_token_spans(
                 &rows[0],
                 ("*", theme),
+                None,
                 theme,
                 theme,
                 theme,

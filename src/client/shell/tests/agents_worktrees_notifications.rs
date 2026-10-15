@@ -1682,3 +1682,141 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
     assert!(state.visible_notification.is_none());
     assert_eq!(state.pending_notifications.len(), 1);
 }
+
+fn hit_text(frame: &FrameData, rect: Rect) -> String {
+    frame_rows(frame)[rect.y as usize]
+        .chars()
+        .skip(rect.x as usize)
+        .take(rect.width as usize)
+        .collect()
+}
+
+#[test]
+fn number_tokens_label_rows_with_their_indexed_binding_position() {
+    use crate::config::{AgentSidebarToken, SpaceSidebarToken};
+
+    let mut projected = snapshot();
+    projected.workspaces[0].worktree = Some(ClientShellWorktree {
+        key: "repo".into(),
+        label: "repo".into(),
+        is_linked_worktree: false,
+    });
+    let workspace = |id: &str, number, label: &str, worktree| ClientShellWorkspace {
+        workspace_id: id.into(),
+        active_tab_id: format!("tab_{id}"),
+        new_workspace_cwd: "/repo".into(),
+        number,
+        label: label.into(),
+        custom_label: true,
+        branch: None,
+        git_ahead_behind: None,
+        tokens: Vec::new(),
+        worktree,
+        focused: false,
+        agent_status: AgentStatus::Idle,
+    };
+    projected
+        .workspaces
+        .push(workspace("ws_2", 2, "other", None));
+    // A linked worktree is drawn under its parent, ahead of `other`.
+    projected.workspaces.push(workspace(
+        "ws_3",
+        3,
+        "child",
+        Some(ClientShellWorktree {
+            key: "repo".into(),
+            label: "repo".into(),
+            is_linked_worktree: true,
+        }),
+    ));
+    let mut second_pane = projected.panes[0].clone();
+    second_pane.pane_id = "pane_2".into();
+    second_pane.focused = false;
+    projected.panes.push(second_pane);
+    let agent = |pane_id: &str, name: &str, agent_status| ClientShellAgent {
+        pane_id: pane_id.into(),
+        workspace_id: "ws_1".into(),
+        tab_id: "tab_1".into(),
+        name: Some(name.into()),
+        display_agent: None,
+        agent: Some("pi".into()),
+        title: None,
+        terminal_title: None,
+        terminal_title_stripped: None,
+        agent_status,
+        state_change_seq: 1,
+        state_labels: Vec::new(),
+        tokens: Vec::new(),
+        focused: false,
+    };
+    projected.agents = vec![
+        agent("pane_1", "calm", AgentStatus::Idle),
+        agent("pane_2", "stuck", AgentStatus::Blocked),
+    ];
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    config.ui.sidebar.spaces.rows = vec![vec![
+        SpaceSidebarToken::Number,
+        SpaceSidebarToken::Workspace,
+    ]];
+    config.ui.sidebar.agents.rows = vec![vec![AgentSidebarToken::Number, AgentSidebarToken::Agent]];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 30).expect("numbered sidebar frame");
+
+    let workspaces = state
+        .hits
+        .workspaces
+        .iter()
+        .map(|hit| hit_text(&frame, hit.rect))
+        .collect::<Vec<_>>();
+    assert!(workspaces[0].starts_with(" 1 "), "rows: {workspaces:?}");
+    assert!(workspaces[1].contains("2 child"), "rows: {workspaces:?}");
+    assert!(
+        workspaces[2].starts_with(" 3 other"),
+        "rows: {workspaces:?}"
+    );
+    let mut switch = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::SwitchWorkspace(1)),
+        &mut switch,
+    );
+    assert!(matches!(
+        &switch.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                &request.method,
+                crate::api::schema::Method::WorkspaceFocus(target)
+                    if target.workspace_id == "ws_3"
+            )
+    ));
+
+    let agents = state
+        .hits
+        .agents
+        .iter()
+        .map(|(rect, _)| hit_text(&frame, *rect))
+        .collect::<Vec<_>>();
+    assert!(agents[0].starts_with(" 1 stuck"), "rows: {agents:?}");
+    assert!(agents[1].starts_with(" 2 calm"), "rows: {agents:?}");
+    let (x, y) = cell_symbol_position(&frame, state.hits.agents[0].0, "1");
+    let number_cell = usize::from(y) * usize::from(frame.width) + usize::from(x);
+    assert_eq!(
+        frame.cells[number_cell].fg,
+        crate::protocol::color_to_u32(state.config.palette.red)
+    );
+    let mut focus = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::FocusAgent(0)),
+        &mut focus,
+    );
+    assert!(matches!(
+        &focus.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                &request.method,
+                crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_2"
+            )
+    ));
+}

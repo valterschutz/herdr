@@ -107,6 +107,7 @@ pub struct SidebarTokenStyle {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentSidebarToken {
     StateIcon,
+    Number,
     StateText,
     Machine,
     Workspace,
@@ -126,6 +127,7 @@ pub enum AgentSidebarToken {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpaceSidebarToken {
     StateIcon,
+    Number,
     StateText,
     Workspace,
     Branch,
@@ -200,7 +202,7 @@ impl RawSidebarToken {
                     return Err("sidebar tokens may contain at most 16 rules".into());
                 }
                 if !token.rules.is_empty()
-                    && matches!(token.token.as_str(), "state_icon" | "git_status")
+                    && matches!(token.token.as_str(), "state_icon" | "number" | "git_status")
                 {
                     return Err("sidebar rules require a text-valued token".into());
                 }
@@ -271,6 +273,7 @@ where
 fn agent_token_name(token: &AgentSidebarToken) -> String {
     match token {
         AgentSidebarToken::StateIcon => "state_icon".into(),
+        AgentSidebarToken::Number => "number".into(),
         AgentSidebarToken::StateText => "state_text".into(),
         AgentSidebarToken::Machine => "machine".into(),
         AgentSidebarToken::Workspace => "workspace".into(),
@@ -287,6 +290,7 @@ fn agent_token_name(token: &AgentSidebarToken) -> String {
 fn space_token_name(token: &SpaceSidebarToken) -> String {
     match token {
         SpaceSidebarToken::StateIcon => "state_icon".into(),
+        SpaceSidebarToken::Number => "number".into(),
         SpaceSidebarToken::StateText => "state_text".into(),
         SpaceSidebarToken::Workspace => "workspace".into(),
         SpaceSidebarToken::Branch => "branch".into(),
@@ -330,6 +334,7 @@ impl<'de> Deserialize<'de> for AgentSidebarToken {
             value,
             &[
                 ("state_icon", Self::StateIcon),
+                ("number", Self::Number),
                 ("state_text", Self::StateText),
                 ("machine", Self::Machine),
                 ("workspace", Self::Workspace),
@@ -383,6 +388,7 @@ impl<'de> Deserialize<'de> for SpaceSidebarToken {
             value,
             &[
                 ("state_icon", Self::StateIcon),
+                ("number", Self::Number),
                 ("state_text", Self::StateText),
                 ("workspace", Self::Workspace),
                 ("branch", Self::Branch),
@@ -563,6 +569,41 @@ row_gap = 3
             vec![SpaceSidebarToken::Custom("jj_status".into())]
         );
         assert_eq!(config.ui.sidebar.spaces.row_gap, 3);
+    }
+
+    #[test]
+    fn parses_number_token_but_rejects_value_rules_on_it() {
+        let config: crate::config::Config = toml::from_str(
+            r#"
+[ui.sidebar.agents]
+rows = [["number", "agent"]]
+
+[ui.sidebar.spaces]
+rows = [["number", "workspace"]]
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.ui.sidebar.agents.rows[0][0],
+            AgentSidebarToken::Number
+        );
+        assert_eq!(
+            config.ui.sidebar.spaces.rows[0][0],
+            SpaceSidebarToken::Number
+        );
+        assert_eq!(
+            toml::to_string(&config.ui.sidebar.spaces).unwrap(),
+            "rows = [[\"number\", \"workspace\"]]\nrow_gap = 0\n"
+        );
+
+        let error = toml::from_str::<crate::config::Config>(
+            r#"
+[ui.sidebar.spaces]
+rows = [[{ token = "number", rules = [{ equals = "1", bold = true }] }]]
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("text-valued token"), "{error}");
     }
 
     #[test]

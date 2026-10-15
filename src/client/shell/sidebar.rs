@@ -326,6 +326,7 @@ pub(crate) fn render_sidebar(
             rect,
             status,
             config.status_indicators,
+            entry_position + 1,
             entry,
             rows,
             workspace.focused,
@@ -689,11 +690,13 @@ pub(in crate::client::shell) fn workspace_rows(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::client::shell) fn render_workspace_rows(
     buffer: &mut Buffer,
     area: Rect,
     status: crate::api::schema::AgentStatus,
     indicators: crate::config::StatusIndicatorStyle,
+    number: usize,
     entry: &WorkspaceEntry,
     rows: Vec<Vec<crate::ui::ResolvedToken>>,
     focused: bool,
@@ -756,6 +759,7 @@ pub(in crate::client::shell) fn render_workspace_rows(
                 status_icon(status, indicators),
                 Style::default().fg(status_color(status, palette)),
             ),
+            Some(number),
             Style::default().fg(status_color(status, palette)),
             workspace_style,
             secondary_style,

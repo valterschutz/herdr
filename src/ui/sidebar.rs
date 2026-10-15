@@ -106,6 +106,7 @@ pub(crate) fn agent_panel_entries_from(
 pub(crate) fn resolved_token_spans(
     resolved: &[ResolvedToken],
     state_icon: (&str, Style),
+    number: Option<usize>,
     state_text_style: Style,
     workspace_style: Style,
     secondary_style: Style,
@@ -113,10 +114,14 @@ pub(crate) fn resolved_token_spans(
     palette: &Palette,
     max_width: usize,
 ) -> Vec<Span<'static>> {
+    // The number token stands in for the state icon and falls back to it when
+    // the row has no position the indexed bindings can reach.
+    let number_text = number.map_or_else(|| state_icon.0.to_string(), |number| number.to_string());
     let fixed_widths = resolved
         .iter()
         .map(|token| match &token.kind {
             ResolvedTokenKind::StateIcon => display_width(state_icon.0),
+            ResolvedTokenKind::Number => display_width(&number_text),
             ResolvedTokenKind::GitStatus { ahead, behind } => {
                 usize::from(*ahead > 0) * display_width(&format!("↑{ahead}"))
                     + usize::from(*behind > 0) * display_width(&format!("↓{behind}"))
@@ -225,6 +230,10 @@ pub(crate) fn resolved_token_spans(
         match &token.kind {
             ResolvedTokenKind::StateIcon => spans.push(Span::styled(
                 state_icon.0.to_string(),
+                apply_token_style(state_icon.1, token.style),
+            )),
+            ResolvedTokenKind::Number => spans.push(Span::styled(
+                number_text.clone(),
                 apply_token_style(state_icon.1, token.style),
             )),
             ResolvedTokenKind::StateText(text) => spans.push(Span::styled(
