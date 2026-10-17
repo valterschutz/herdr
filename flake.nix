@@ -38,6 +38,10 @@
             "rust-src"
             "rust-analyzer"
           ];
+          # Arrhenius has no Nix; build a standalone executable with cargo-zigbuild.
+          targets =
+            (toolchain.targets or [ ])
+            ++ lib.optional pkgs.stdenv.hostPlatform.isLinux "x86_64-unknown-linux-musl";
         });
       rustPlatformFor =
         pkgs:
@@ -88,6 +92,7 @@
             name = "herdr-dev";
             packages = with pkgs; [
               cargo-nextest
+              cargo-zigbuild
               cmake
               just
               ninja
